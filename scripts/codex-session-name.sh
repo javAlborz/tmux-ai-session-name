@@ -26,6 +26,26 @@ thread_id_from_shell_snapshot_args() {
     head -1
 }
 
+thread_id_from_process_logs() {
+  local db="$codex_home/logs_2.sqlite"
+  local pid
+  local thread_id
+
+  command -v sqlite3 >/dev/null 2>&1 || return 1
+  [ -r "$db" ] || return 1
+
+  printf '%s\n' "$rows" |
+  grep -Ei '(^|[ /.-])codex([ /.-]|$)|@openai/codex' |
+  awk '{print $1}' |
+  while read -r pid; do
+    [ -n "$pid" ] || continue
+    thread_id="$(sqlite3 "$db" "select thread_id from logs where process_uuid like 'pid:$pid:%' and thread_id is not null and thread_id != '' order by ts desc, ts_nanos desc limit 1;" 2>/dev/null | head -1)"
+    [ -n "$thread_id" ] || continue
+    printf '%s\n' "$thread_id"
+    break
+  done | head -1
+}
+
 sqlite_user_title_for_thread() {
   local thread_id="$1"
   local db="$codex_home/state_5.sqlite"
@@ -38,6 +58,7 @@ sqlite_user_title_for_thread() {
 }
 
 thread_id="$(thread_id_from_env || true)"
+[ -n "$thread_id" ] || thread_id="$(thread_id_from_process_logs || true)"
 [ -n "$thread_id" ] || thread_id="$(thread_id_from_shell_snapshot_args || true)"
 if [ -n "$thread_id" ]; then
   title="$(sqlite_user_title_for_thread "$thread_id" || true)"
