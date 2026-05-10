@@ -3,9 +3,17 @@ set -u
 
 pane_pid="${1:-}"
 pane_cwd="${2:-}"
-_pane_title="${3:-}"
+pane_title="${3:-}"
 rows="${4:-}"
 claude_home="${CLAUDE_HOME:-$HOME/.claude}"
+
+clean_title() {
+  local title="$1"
+
+  title="$(printf '%s' "$title" | sed -E 's/^[[:space:]]*✳[[:space:]]*//; s/[[:space:]]+/ /g; s/^ //; s/ $//')"
+  title="$(printf '%s' "$title" | sed -E 's/^(claude|Claude Code|Claude)[[:space:]:-]+//')"
+  printf '%s\n' "$title"
+}
 
 name_from_args="$(printf '%s\n' "$rows" | sed -nE 's/.*(^|[[:space:]])(-n|--name)(=|[[:space:]])"?([^"[:space:]]([^"]*[^"[:space:]])?)"?.*/\4/p' | head -1)"
 if [ -n "$name_from_args" ]; then
@@ -74,6 +82,36 @@ renamed_title_from_recent_session() {
     done
 }
 
+pane_title_has_rename_record() {
+  local title="$1"
+  local project_dir
+  local escaped_title
+  local newest_files
+
+  [ -n "$title" ] || return 1
+  project_dir="$(project_dir_for_cwd "$pane_cwd")"
+  [ -d "$project_dir" ] || return 1
+
+  newest_files="$(find "$project_dir" -maxdepth 1 -type f -name '*.jsonl' -printf '%T@ %p\n' 2>/dev/null |
+    sort -rn |
+    head -10 |
+    cut -d' ' -f2-)"
+  [ -n "$newest_files" ] || return 1
+
+  escaped_title="$(printf '%s\n' "$title" | sed 's/[.[\*^$()+?{|\\]/\\&/g')"
+  while read -r file; do
+    [ -r "$file" ] || continue
+    if grep -Eq "<local-command-stdout>Session renamed to: ${escaped_title}</local-command-stdout>" "$file"; then
+      printf '%s\n' "$title"
+      return 0
+    fi
+  done <<EOF
+$newest_files
+EOF
+
+  return 1
+}
+
 start_ms="$(claude_process_start_ms || true)"
 if [ -n "$start_ms" ]; then
   title="$(renamed_title_from_recent_session "$start_ms" || true)"
@@ -82,5 +120,18 @@ if [ -n "$start_ms" ]; then
     exit 0
   fi
 fi
+
+title="$(clean_title "$pane_title")"
+case "$title" in
+  ""|bash|zsh|fish|claude|"Claude Code")
+    ;;
+  *)
+    title="$(pane_title_has_rename_record "$title" || true)"
+    if [ -n "$title" ]; then
+      printf '%s\n' "$title"
+      exit 0
+    fi
+    ;;
+esac
 
 exit 1
