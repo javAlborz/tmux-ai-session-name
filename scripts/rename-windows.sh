@@ -39,6 +39,7 @@ esac
 format="$(tmux_option "@ai-session-name-format" "#{tool}: #{session}")"
 restore="$(tmux_option "@ai-session-name-restore" "off")"
 fallback="$(tmux_option "@ai-session-name-fallback" "")"
+restore_unnamed="$(tmux_option "@ai-session-name-restore-unnamed" "on")"
 
 tmux list-panes -a -F '#{session_id}	#{window_id}	#{pane_id}	#{pane_active}	#{pane_pid}	#{pane_current_path}	#{pane_title}	#{window_name}' |
 while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_cwd pane_title window_name; do
@@ -46,13 +47,30 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
 
   result="$("$detect_script" "$pane_pid" "$pane_cwd" "$pane_title" 2>/dev/null || true)"
   if [ -z "$result" ]; then
+    if [ "$restore_unnamed" = "on" ]; then
+      tool_only="$(AI_SESSION_NAME_REPORT_TOOL_ONLY=1 "$detect_script" "$pane_pid" "$pane_cwd" "$pane_title" 2>/dev/null || true)"
+      if [ -n "$tool_only" ]; then
+        new_name="$(basename "$pane_cwd" 2>/dev/null || true)"
+        [ -n "$new_name" ] || new_name="$(tmux display-message -pt "$pane_id" -p '#{pane_current_command}' 2>/dev/null || true)"
+        new_name="$(sanitize_name "$new_name" "$max_length")"
+        if [ -n "$new_name" ] && [ "$new_name" != "$window_name" ]; then
+          tmux set-window-option -t "$window_id" allow-rename on >/dev/null 2>&1 || true
+          tmux rename-window -t "$window_id" "$new_name"
+        fi
+        continue
+      fi
+    fi
+
     generic_window_name="$(printf '%s' "$window_name" | sed -E 's/^[[:space:]]*✳[[:space:]]*//; s/[[:space:]]+/ /g; s/^ //; s/ $//' | tr '[:upper:]' '[:lower:]')"
     case "$generic_window_name" in
       codex|claude|"claude code")
         new_name="$(basename "$pane_cwd" 2>/dev/null || true)"
         [ -n "$new_name" ] || new_name="$(tmux display-message -pt "$pane_id" -p '#{pane_current_command}' 2>/dev/null || true)"
         new_name="$(sanitize_name "$new_name" "$max_length")"
-        [ -n "$new_name" ] && tmux rename-window -t "$window_id" "$new_name"
+        if [ -n "$new_name" ]; then
+          tmux set-window-option -t "$window_id" allow-rename on >/dev/null 2>&1 || true
+          tmux rename-window -t "$window_id" "$new_name"
+        fi
         continue
         ;;
     esac
@@ -64,7 +82,10 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
         new_name="$(tmux display-message -pt "$pane_id" -p '#{pane_current_command}' 2>/dev/null || true)"
       fi
       new_name="$(sanitize_name "$new_name" "$max_length")"
-      [ -n "$new_name" ] && tmux rename-window -t "$window_id" "$new_name"
+      if [ -n "$new_name" ]; then
+        tmux set-window-option -t "$window_id" allow-rename on >/dev/null 2>&1 || true
+        tmux rename-window -t "$window_id" "$new_name"
+      fi
     fi
     continue
   fi
@@ -79,6 +100,7 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
   new_name="$(sanitize_name "$new_name" "$max_length")"
 
   if [ -n "$new_name" ] && [ "$new_name" != "$window_name" ]; then
+    tmux set-window-option -t "$window_id" allow-rename off >/dev/null 2>&1 || true
     tmux rename-window -t "$window_id" "$new_name"
   fi
 done

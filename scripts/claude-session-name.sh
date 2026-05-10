@@ -84,15 +84,20 @@ renamed_title_from_recent_session() {
 
 pane_title_has_rename_record() {
   local title="$1"
+  local start_ms="$2"
   local project_dir
   local escaped_title
   local newest_files
+  local lower_sec
 
   [ -n "$title" ] || return 1
+  [ -n "$start_ms" ] || return 1
   project_dir="$(project_dir_for_cwd "$pane_cwd")"
   [ -d "$project_dir" ] || return 1
+  lower_sec=$((start_ms / 1000))
 
   newest_files="$(find "$project_dir" -maxdepth 1 -type f -name '*.jsonl' -printf '%T@ %p\n' 2>/dev/null |
+    awk -v low="$lower_sec" '$1 >= low { print }' |
     sort -rn |
     head -10 |
     cut -d' ' -f2-)"
@@ -126,10 +131,12 @@ case "$title" in
   ""|bash|zsh|fish|claude|"Claude Code")
     ;;
   *)
-    title="$(pane_title_has_rename_record "$title" || true)"
-    if [ -n "$title" ]; then
-      printf '%s\n' "$title"
-      exit 0
+    if [ -n "$start_ms" ]; then
+      title="$(pane_title_has_rename_record "$title" "$start_ms" || true)"
+      if [ -n "$title" ]; then
+        printf '%s\n' "$title"
+        exit 0
+      fi
     fi
     ;;
 esac

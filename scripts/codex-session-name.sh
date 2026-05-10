@@ -26,37 +26,6 @@ thread_id_from_shell_snapshot_args() {
     head -1
 }
 
-codex_process_start_ms() {
-  local pid
-  local comm
-  local start_ticks
-  local boot_time
-  local hz
-  local start_ms
-
-  command -v getconf >/dev/null 2>&1 || return 1
-  hz="$(getconf CLK_TCK 2>/dev/null || true)"
-  [ -n "$hz" ] || return 1
-
-  boot_time="$(awk '$1 == "btime" { print $2 }' /proc/stat 2>/dev/null)"
-  [ -n "$boot_time" ] || return 1
-
-  printf '%s\n' "$rows" |
-  while read -r pid _ppid comm _args; do
-    case "$comm" in
-      codex|MainThread|node) ;;
-      *) continue ;;
-    esac
-    [ -r "/proc/$pid/stat" ] || continue
-    start_ticks="$(awk '{ print $22 }' "/proc/$pid/stat" 2>/dev/null)"
-    [ -n "$start_ticks" ] || continue
-    start_ms=$(( (boot_time * 1000) + (start_ticks * 1000 / hz) ))
-    printf '%s\n' "$start_ms"
-  done |
-    sort -n |
-    head -1
-}
-
 sqlite_user_title_for_thread() {
   local thread_id="$1"
   local db="$codex_home/state_5.sqlite"
@@ -68,39 +37,10 @@ sqlite_user_title_for_thread() {
     head -1
 }
 
-sqlite_user_title_for_process_start() {
-  local start_ms="$1"
-  local db="$codex_home/state_5.sqlite"
-  local escaped_cwd
-  local lower_bound
-  local upper_bound
-
-  command -v sqlite3 >/dev/null 2>&1 || return 1
-  [ -r "$db" ] || return 1
-  [ -n "$pane_cwd" ] || return 1
-  [ -n "$start_ms" ] || return 1
-
-  escaped_cwd="${pane_cwd//\'/\'\'}"
-  lower_bound=$((start_ms - 60000))
-  upper_bound=$((start_ms + 300000))
-
-  sqlite3 "$db" "select nullif(title,'') from threads where archived = 0 and cwd = '$escaped_cwd' and title != '' and (first_user_message = '' or title != first_user_message) and ((created_at_ms between $lower_bound and $upper_bound) or (updated_at_ms between $lower_bound and $upper_bound)) order by case when created_at_ms between $lower_bound and $upper_bound then abs(created_at_ms - $start_ms) else abs(updated_at_ms - $start_ms) + 60000 end asc limit 1;" 2>/dev/null |
-    head -1
-}
-
 thread_id="$(thread_id_from_env || true)"
 [ -n "$thread_id" ] || thread_id="$(thread_id_from_shell_snapshot_args || true)"
 if [ -n "$thread_id" ]; then
   title="$(sqlite_user_title_for_thread "$thread_id" || true)"
-  if [ -n "$title" ]; then
-    printf '%s\n' "$title"
-    exit 0
-  fi
-fi
-
-start_ms="$(codex_process_start_ms || true)"
-if [ -n "$start_ms" ]; then
-  title="$(sqlite_user_title_for_process_start "$start_ms" || true)"
   if [ -n "$title" ]; then
     printf '%s\n' "$title"
     exit 0

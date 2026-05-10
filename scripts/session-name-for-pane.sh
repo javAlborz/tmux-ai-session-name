@@ -67,6 +67,11 @@ case "$tool" in
     ;;
 esac
 
+if [ -z "${session:-}" ] && [ "${AI_SESSION_NAME_REPORT_TOOL_ONLY:-}" = "1" ]; then
+  printf '%s\t\n' "$tool"
+  exit 2
+fi
+
 [ -n "${session:-}" ] || exit 1
 session="$(printf '%s' "$session" | sed -E 's/^[[:space:]]*✳[[:space:]]*//; s/[[:space:]]+/ /g; s/^ //; s/ $//')"
 [ -n "$session" ] || exit 1
@@ -74,6 +79,10 @@ session="$(printf '%s' "$session" | sed -E 's/^[[:space:]]*✳[[:space:]]*//; s/
 generic_session="$(printf '%s' "$session" | tr '[:upper:]' '[:lower:]' | sed -E 's/[[:space:]-]+/ /g; s/^ //; s/ $//')"
 case "$generic_session" in
   codex|claude|"claude code")
+    if [ "${AI_SESSION_NAME_REPORT_TOOL_ONLY:-}" = "1" ]; then
+      printf '%s\t\n' "$tool"
+      exit 2
+    fi
     exit 1
     ;;
 esac

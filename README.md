@@ -28,12 +28,18 @@ set -g @ai-session-name-interval '5'
 set -g @ai-session-name-format '#{session}'
 set -g @ai-session-name-max-length '60'
 set -g @ai-session-name-restore 'off'
+set -g @ai-session-name-restore-unnamed 'off'
 set -g @ai-session-name-fallback ''
 ```
 
 `@ai-session-name-restore` renames a window back when the active pane is no
 longer Claude or Codex. By default it is off because many people manually name
 tmux windows.
+
+`@ai-session-name-restore-unnamed` can rename Claude/Codex windows without an
+explicit name back to the active pane directory basename. It defaults to off
+because Codex process trees can change while a session is active, and aggressive
+restore can race explicitly named sessions.
 
 ## Detection
 
