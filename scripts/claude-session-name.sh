@@ -155,14 +155,6 @@ EOF
 }
 
 start_ms="$(claude_process_start_ms || true)"
-if [ -n "$start_ms" ]; then
-  title="$(renamed_title_from_recent_session "$start_ms" || true)"
-  if [ -n "$title" ]; then
-    printf '%s\n' "$title"
-    exit 0
-  fi
-fi
-
 title="$(clean_title "$pane_title")"
 case "$title" in
   ""|bash|zsh|fish|claude|"Claude Code")
