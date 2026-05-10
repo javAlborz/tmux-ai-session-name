@@ -31,41 +31,6 @@ sanitize_name() {
   printf '%s\n' "$name"
 }
 
-abbreviate_generated_name() {
-  local name="$1"
-  local words
-
-  if ! printf '%s\n' "$name" | grep -Eq '[[:space:]]' && printf '%s\n' "$name" | grep -Eq '[-_/]'; then
-    printf '%s\n' "$name"
-    return
-  fi
-
-  words="$(printf '%s\n' "$name" | awk '{
-    if (NF < 2) {
-      print $0
-      next
-    }
-    for (i = 1; i <= NF; i++) {
-      word = $i
-      gsub(/^[^[:alnum:]]+|[^[:alnum:]]+$/, "", word)
-      if (word != "") {
-        printf "%s", tolower(substr(word, 1, 1))
-      }
-    }
-    printf "\n"
-  }')"
-
-  if printf '%s\n' "$name" | grep -Eq '[[:space:]]'; then
-    words="${words:0:5}"
-  fi
-
-  if [ -n "$words" ]; then
-    printf '%s\n' "$words"
-  else
-    printf '%s\n' "$name"
-  fi
-}
-
 max_length="$(tmux_option "@ai-session-name-max-length" "60")"
 case "$max_length" in
   ''|*[!0-9]*) max_length=60 ;;
@@ -111,7 +76,6 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
 
   new_name="${format//\#\{tool\}/$tool}"
   new_name="${new_name//\#\{session\}/$session}"
-  new_name="$(abbreviate_generated_name "$new_name")"
   new_name="$(sanitize_name "$new_name" "$max_length")"
 
   if [ -n "$new_name" ] && [ "$new_name" != "$window_name" ]; then

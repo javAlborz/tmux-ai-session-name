@@ -1,10 +1,10 @@
 # tmux-ai-session-name
 
-Rename tmux windows from the active Claude Code or Codex session in that window.
+Rename tmux windows from explicitly named Claude Code or Codex sessions.
 
 The plugin watches the active pane in each tmux window. If it sees Claude Code or
-Codex in the pane's process tree, it tries to resolve a useful session name and
-renames the window.
+Codex in the pane's process tree, it tries to resolve a user-provided session
+name and renames the window.
 
 ## Install
 
@@ -37,12 +37,10 @@ tmux windows.
 
 ## Detection
 
-Claude Code names are read from the pane title first, then from `--name`/`-n`
-arguments.
+Claude Code names are read from `--name`/`-n` arguments or from `/rename`
+records in Claude's project JSONL files. Auto-generated pane titles are ignored.
 
-Codex names are read from an explicit Codex-prefixed pane title first. If that is
-not available, the plugin maps the live Codex process to a thread by reading
-`CODEX_THREAD_ID`, by parsing Codex shell snapshot paths from the active process
-tree, or by matching a thread title to the Codex process start time. It
-deliberately avoids using "latest session in this directory" because that can
-rename a clean Codex session to the previous session's title.
+Codex names are resolved by mapping the live Codex process to a thread, then
+reading that thread's `title` from `~/.codex/state_5.sqlite` only when it appears
+user-provided. Generated titles are ignored by requiring `title` to differ from
+`first_user_message`, or for `first_user_message` to be empty.
