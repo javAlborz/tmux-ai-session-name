@@ -54,54 +54,6 @@ claude_process_start_ms() {
     head -1
 }
 
-renamed_title_from_recent_session() {
-  local start_ms="$1"
-  local project_dir
-  local lower_sec
-  local upper_sec
-  local title
-  local line
-  local timestamp
-  local timestamp_sec
-  local candidate_title
-
-  command -v find >/dev/null 2>&1 || return 1
-  command -v date >/dev/null 2>&1 || return 1
-  project_dir="$(project_dir_for_cwd "$pane_cwd")"
-  [ -d "$project_dir" ] || return 1
-  [ -n "$start_ms" ] || return 1
-
-  lower_sec=$((start_ms / 1000 - 60))
-  upper_sec=$(($(date -u +%s) + 300))
-
-  title=""
-  while read -r file; do
-    [ -r "$file" ] || continue
-    while IFS= read -r line; do
-      case "$line" in
-        *'<local-command-stdout>Session renamed to: '*'</local-command-stdout>'*) ;;
-        *) continue ;;
-      esac
-
-      timestamp="$(printf '%s\n' "$line" | sed -nE 's/.*"timestamp":"([^"]+)".*/\1/p')"
-      [ -n "$timestamp" ] || continue
-      timestamp_sec="$(date -u -d "$timestamp" +%s 2>/dev/null || true)"
-      [ -n "$timestamp_sec" ] || continue
-      [ "$timestamp_sec" -ge "$lower_sec" ] || continue
-      [ "$timestamp_sec" -le "$upper_sec" ] || continue
-
-      candidate_title="$(printf '%s\n' "$line" | sed -nE 's/.*<local-command-stdout>Session renamed to: ([^<]+)<\/local-command-stdout>.*/\1/p')"
-      [ -n "$candidate_title" ] || continue
-      title="$candidate_title"
-    done < "$file"
-  done <<EOF
-$(find "$project_dir" -maxdepth 1 -type f -name '*.jsonl' -printf '%p\n' 2>/dev/null)
-EOF
-
-  [ -n "$title" ] || return 1
-  printf '%s\n' "$title"
-}
-
 pane_title_has_rename_record() {
   local title="$1"
   local start_ms="$2"
@@ -113,6 +65,7 @@ pane_title_has_rename_record() {
   local line
   local timestamp
   local timestamp_sec
+  local matches
 
   [ -n "$title" ] || return 1
   [ -n "$start_ms" ] || return 1
@@ -132,11 +85,10 @@ pane_title_has_rename_record() {
   escaped_title="$(printf '%s\n' "$title" | sed 's/[.[\*^$()+?{|\\]/\\&/g')"
   while read -r file; do
     [ -r "$file" ] || continue
-    while IFS= read -r line; do
-      if ! printf '%s\n' "$line" | grep -Eq "<local-command-stdout>Session renamed to: ${escaped_title}</local-command-stdout>"; then
-        continue
-      fi
+    matches="$(grep -Eh "<local-command-stdout>Session renamed to: ${escaped_title}</local-command-stdout>" "$file" 2>/dev/null || true)"
+    [ -n "$matches" ] || continue
 
+    while IFS= read -r line; do
       timestamp="$(printf '%s\n' "$line" | sed -nE 's/.*"timestamp":"([^"]+)".*/\1/p')"
       [ -n "$timestamp" ] || continue
       timestamp_sec="$(date -u -d "$timestamp" +%s 2>/dev/null || true)"
@@ -146,7 +98,9 @@ pane_title_has_rename_record() {
 
       printf '%s\n' "$title"
       return 0
-    done < "$file"
+    done <<EOF_MATCHES
+$matches
+EOF_MATCHES
   done <<EOF
 $newest_files
 EOF
