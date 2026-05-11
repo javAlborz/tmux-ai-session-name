@@ -10,7 +10,7 @@ claude_home="${CLAUDE_HOME:-$HOME/.claude}"
 clean_title() {
   local title="$1"
 
-  title="$(printf '%s' "$title" | sed -E 's/^[[:space:]]*✳[[:space:]]*//; s/[[:space:]]+/ /g; s/^ //; s/ $//')"
+  title="$(printf '%s' "$title" | sed -E 's/^[[:space:]]*[^[:alnum:][:space:]]+[[:space:]]+//; s/[[:space:]]+/ /g; s/^ //; s/ $//')"
   title="$(printf '%s' "$title" | sed -E 's/^(claude|Claude Code|Claude)[[:space:]:-]+//')"
   printf '%s\n' "$title"
 }
@@ -26,7 +26,7 @@ project_dir_for_cwd() {
   local encoded
 
   [ -n "$cwd" ] || return 1
-  encoded="$(printf '%s' "$cwd" | sed 's#/#-#g')"
+  encoded="$(printf '%s' "$cwd" | sed 's#[^A-Za-z0-9]#-#g')"
   printf '%s/projects/%s\n' "$claude_home" "$encoded"
 }
 
