@@ -8,6 +8,27 @@ rows="${4:-}"
 
 codex_home="${CODEX_HOME:-$HOME/.codex}"
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -r "$script_dir/cache-lib.sh" ]; then
+  # shellcheck disable=SC1091
+  . "$script_dir/cache-lib.sh"
+fi
+
+state_db_mtime="$(stat -c %Y "$codex_home/state_5.sqlite" 2>/dev/null || printf '0\n')"
+logs_db_mtime="$(stat -c %Y "$codex_home/logs_2.sqlite" 2>/dev/null || printf '0\n')"
+cache_key="codex|${pane_pid}|${state_db_mtime}|${logs_db_mtime}"
+
+if command -v cache_lookup >/dev/null 2>&1; then
+  cached_value="$(cache_lookup "$cache_key" 30)"
+  cache_rc=$?
+  if [ "$cache_rc" -eq 0 ]; then
+    printf '%s\n' "$cached_value"
+    exit 0
+  elif [ "$cache_rc" -eq 2 ]; then
+    exit 1
+  fi
+fi
+
 thread_id_from_env() {
   local pid
   local environ
@@ -60,12 +81,19 @@ sqlite_user_title_for_thread() {
 thread_id="$(thread_id_from_env || true)"
 [ -n "$thread_id" ] || thread_id="$(thread_id_from_process_logs || true)"
 [ -n "$thread_id" ] || thread_id="$(thread_id_from_shell_snapshot_args || true)"
+
+title=""
 if [ -n "$thread_id" ]; then
   title="$(sqlite_user_title_for_thread "$thread_id" || true)"
-  if [ -n "$title" ]; then
-    printf '%s\n' "$title"
-    exit 0
-  fi
+fi
+
+if command -v cache_store >/dev/null 2>&1; then
+  cache_store "$cache_key" "$title"
+fi
+
+if [ -n "$title" ]; then
+  printf '%s\n' "$title"
+  exit 0
 fi
 
 exit 1

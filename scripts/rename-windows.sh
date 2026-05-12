@@ -4,6 +4,21 @@ set -u
 plugin_dir="${AI_SESSION_NAME_PLUGIN_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 detect_script="$plugin_dir/scripts/session-name-for-pane.sh"
 
+# Shared per-pass state: cache file and a single process-table snapshot
+# so per-pane subscripts don't each re-fork `ps -eo`.
+state_dir="${TMPDIR:-/tmp}"
+server_pid="$(tmux display-message -p '#{pid}' 2>/dev/null || echo standalone)"
+
+if [ -z "${AI_SESSION_NAME_CACHE_FILE:-}" ]; then
+  AI_SESSION_NAME_CACHE_FILE="$state_dir/tmux-ai-session-name.${server_pid}.cache"
+fi
+export AI_SESSION_NAME_CACHE_FILE
+
+process_table_file="$state_dir/tmux-ai-session-name.${server_pid}.$$.proc"
+ps -eo pid=,ppid=,comm=,args= >"$process_table_file" 2>/dev/null || true
+trap 'rm -f "$process_table_file"' EXIT INT TERM
+export AI_SESSION_NAME_PROCESS_TABLE_FILE="$process_table_file"
+
 tmux_option() {
   local option="$1"
   local default_value="$2"

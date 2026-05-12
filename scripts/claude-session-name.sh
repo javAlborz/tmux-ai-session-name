@@ -7,6 +7,12 @@ pane_title="${3:-}"
 rows="${4:-}"
 claude_home="${CLAUDE_HOME:-$HOME/.claude}"
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -r "$script_dir/cache-lib.sh" ]; then
+  # shellcheck disable=SC1091
+  . "$script_dir/cache-lib.sh"
+fi
+
 clean_title() {
   local title="$1"
 
@@ -115,9 +121,24 @@ case "$title" in
     ;;
   *)
     if [ -n "$start_ms" ]; then
-      title="$(pane_title_has_rename_record "$title" "$start_ms" || true)"
-      if [ -n "$title" ]; then
-        printf '%s\n' "$title"
+      cache_key="claude|${pane_pid}|${start_ms}|${title}"
+      if command -v cache_lookup >/dev/null 2>&1; then
+        cached_value="$(cache_lookup "$cache_key" 30)"
+        cache_rc=$?
+        if [ "$cache_rc" -eq 0 ]; then
+          printf '%s\n' "$cached_value"
+          exit 0
+        elif [ "$cache_rc" -eq 2 ]; then
+          exit 1
+        fi
+      fi
+
+      verified="$(pane_title_has_rename_record "$title" "$start_ms" || true)"
+      if command -v cache_store >/dev/null 2>&1; then
+        cache_store "$cache_key" "$verified"
+      fi
+      if [ -n "$verified" ]; then
+        printf '%s\n' "$verified"
         exit 0
       fi
     fi

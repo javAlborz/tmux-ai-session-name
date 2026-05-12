@@ -8,7 +8,34 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 [ -n "$pane_pid" ] || exit 1
 
+if [ -r "$script_dir/cache-lib.sh" ]; then
+  # shellcheck disable=SC1091
+  . "$script_dir/cache-lib.sh"
+fi
+
+# Outer cache: key by pane_pid + cleaned title. Cache the full output of
+# detection (tool<TAB>session). On hit we skip the process-tree walk and
+# the tool-specific scripts entirely.
+report_tool_only="${AI_SESSION_NAME_REPORT_TOOL_ONLY:-}"
+cleaned_pane_title="$(printf '%s' "$pane_title" | sed -E 's/^[[:space:]]*[^[:alnum:][:space:]]+[[:space:]]+//; s/[[:space:]]+/ /g; s/^ //; s/ $//')"
+outer_cache_key="pane|${pane_pid}|${cleaned_pane_title}"
+
+if [ "$report_tool_only" != "1" ] && command -v cache_lookup >/dev/null 2>&1; then
+  cached_value="$(cache_lookup "$outer_cache_key" 10)"
+  cache_rc=$?
+  if [ "$cache_rc" -eq 0 ]; then
+    printf '%s\n' "${cached_value//$'\x1f'/$'\t'}"
+    exit 0
+  elif [ "$cache_rc" -eq 2 ]; then
+    exit 1
+  fi
+fi
+
 process_table() {
+  if [ -n "${AI_SESSION_NAME_PROCESS_TABLE_FILE:-}" ] && [ -r "${AI_SESSION_NAME_PROCESS_TABLE_FILE}" ]; then
+    cat "$AI_SESSION_NAME_PROCESS_TABLE_FILE"
+    return 0
+  fi
   ps -eo pid=,ppid=,comm=,args= 2>/dev/null || true
 }
 
@@ -46,6 +73,13 @@ EOF
   done
 }
 
+negative_exit() {
+  if [ "$report_tool_only" != "1" ] && command -v cache_store >/dev/null 2>&1; then
+    cache_store "$outer_cache_key" ""
+  fi
+  exit 1
+}
+
 rows="$(descendant_rows "$pane_pid")"
 rows_with_root="$(process_table | awk -v pid="$pane_pid" '$1 == pid { print }'; printf '%s\n' "$rows")"
 
@@ -55,7 +89,7 @@ if printf '%s\n' "$rows_with_root" | grep -Eiq '(^|[ /.-])claude([ /.-]|$)|claud
 elif printf '%s\n' "$rows_with_root" | grep -Eiq '(^|[ /.-])codex([ /.-]|$)|@openai/codex'; then
   tool="codex"
 else
-  exit 1
+  negative_exit
 fi
 
 case "$tool" in
@@ -67,24 +101,28 @@ case "$tool" in
     ;;
 esac
 
-if [ -z "${session:-}" ] && [ "${AI_SESSION_NAME_REPORT_TOOL_ONLY:-}" = "1" ]; then
+if [ -z "${session:-}" ] && [ "$report_tool_only" = "1" ]; then
   printf '%s\t\n' "$tool"
   exit 2
 fi
 
-[ -n "${session:-}" ] || exit 1
-session="$(printf '%s' "$session" | sed -E 's/^[[:space:]]*✳[[:space:]]*//; s/[[:space:]]+/ /g; s/^ //; s/ $//')"
-[ -n "$session" ] || exit 1
+[ -n "${session:-}" ] || negative_exit
+session="$(printf '%s' "$session" | sed -E 's/^[[:space:]]*[^[:alnum:][:space:]]+[[:space:]]+//; s/[[:space:]]+/ /g; s/^ //; s/ $//')"
+[ -n "$session" ] || negative_exit
 
 generic_session="$(printf '%s' "$session" | tr '[:upper:]' '[:lower:]' | sed -E 's/[[:space:]-]+/ /g; s/^ //; s/ $//')"
 case "$generic_session" in
   codex|claude|"claude code")
-    if [ "${AI_SESSION_NAME_REPORT_TOOL_ONLY:-}" = "1" ]; then
+    if [ "$report_tool_only" = "1" ]; then
       printf '%s\t\n' "$tool"
       exit 2
     fi
-    exit 1
+    negative_exit
     ;;
 esac
 
-printf '%s\t%s\n' "$tool" "$session"
+output="$(printf '%s\t%s' "$tool" "$session")"
+if [ "$report_tool_only" != "1" ] && command -v cache_store >/dev/null 2>&1; then
+  cache_store "$outer_cache_key" "${output//$'\t'/$'\x1f'}"
+fi
+printf '%s\n' "$output"
