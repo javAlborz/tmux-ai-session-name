@@ -60,11 +60,19 @@ thread_id_from_process_logs() {
   awk '{print $1}' |
   while read -r pid; do
     [ -n "$pid" ] || continue
-    thread_id="$(sqlite3 "$db" "select thread_id from logs where process_uuid like 'pid:$pid:%' and thread_id is not null and thread_id != '' order by ts desc, ts_nanos desc limit 1;" 2>/dev/null | head -1)"
+    thread_id="$(sqlite3 "$db" "select thread_id from (select thread_id, max(ts) as last_ts, max(ts_nanos) as last_ts_nanos from logs where process_uuid like 'pid:$pid:%' and thread_id is not null and thread_id != '' group by thread_id order by last_ts desc, last_ts_nanos desc limit 5);" 2>/dev/null)"
     [ -n "$thread_id" ] || continue
     printf '%s\n' "$thread_id"
     break
-  done | head -1
+  done
+}
+
+candidate_thread_ids() {
+  {
+    thread_id_from_env || true
+    thread_id_from_shell_snapshot_args || true
+    thread_id_from_process_logs || true
+  } | awk 'NF && !seen[$0]++'
 }
 
 sqlite_user_title_for_thread() {
@@ -78,14 +86,13 @@ sqlite_user_title_for_thread() {
     head -1
 }
 
-thread_id="$(thread_id_from_env || true)"
-[ -n "$thread_id" ] || thread_id="$(thread_id_from_process_logs || true)"
-[ -n "$thread_id" ] || thread_id="$(thread_id_from_shell_snapshot_args || true)"
-
 title=""
-if [ -n "$thread_id" ]; then
+candidates="$(candidate_thread_ids || true)"
+while read -r thread_id; do
+  [ -n "$thread_id" ] || continue
   title="$(sqlite_user_title_for_thread "$thread_id" || true)"
-fi
+  [ -n "$title" ] && break
+done <<<"$candidates"
 
 if command -v cache_store >/dev/null 2>&1; then
   cache_store "$cache_key" "$title"
