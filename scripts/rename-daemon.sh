@@ -19,6 +19,13 @@ tmux_option() {
 
 server_pid="$(tmux display-message -p '#{pid}' 2>/dev/null || echo unknown)"
 pid_file="${TMPDIR:-/tmp}/tmux-ai-session-name.${server_pid}.pid"
+lock_file="${pid_file}.lock"
+
+# Serialise the check-and-write so concurrent hook firings can't spawn duplicates.
+exec 9>"$lock_file"
+if command -v flock >/dev/null 2>&1; then
+  flock -n 9 || exit 0
+fi
 
 if [ -r "$pid_file" ]; then
   old_pid="$(cat "$pid_file" 2>/dev/null || true)"
@@ -28,7 +35,7 @@ if [ -r "$pid_file" ]; then
 fi
 
 echo "$$" >"$pid_file"
-trap 'rm -f "$pid_file"' EXIT INT TERM
+trap 'rm -f "$pid_file" "$lock_file"' EXIT INT TERM
 
 while tmux info >/dev/null 2>&1; do
   enabled="$(tmux_option "@ai-session-name-enabled" "on")"
