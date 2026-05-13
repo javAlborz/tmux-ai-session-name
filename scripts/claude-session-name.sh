@@ -21,7 +21,7 @@ clean_title() {
   printf '%s\n' "$title"
 }
 
-name_from_args="$(printf '%s\n' "$rows" | sed -nE 's/.*(^|[[:space:]])(-n|--name)(=|[[:space:]])"?([^"[:space:]]([^"]*[^"[:space:]])?)"?.*/\4/p' | head -1)"
+name_from_args="$(printf '%s\n' "$rows" | awk '$3 == "claude"' | sed -nE 's/.*(^|[[:space:]])(-n|--name)(=|[[:space:]])"?([^"[:space:]]([^"]*[^"[:space:]])?)"?.*/\4/p' | head -1)"
 if [ -n "$name_from_args" ]; then
   printf '%s\n' "$name_from_args"
   exit 0
