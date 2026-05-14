@@ -55,6 +55,43 @@ format="$(tmux_option "@ai-session-name-format" "#{tool}: #{session}")"
 restore="$(tmux_option "@ai-session-name-restore" "off")"
 fallback="$(tmux_option "@ai-session-name-fallback" "")"
 restore_unnamed="$(tmux_option "@ai-session-name-restore-unnamed" "on")"
+owned_option="@ai-session-name-owned"
+previous_name_option="@ai-session-name-previous-name"
+
+window_option() {
+  local target="$1"
+  local option="$2"
+
+  tmux show-window-option -t "$target" -qv "$option" 2>/dev/null || true
+}
+
+restore_plugin_owned_window() {
+  local target="$1"
+  local pane_path="$2"
+  local current_name="$3"
+  local owned
+  local previous_name
+  local new_name
+
+  owned="$(window_option "$target" "$owned_option")"
+  [ "$owned" = "1" ] || return 0
+
+  previous_name="$(window_option "$target" "$previous_name_option")"
+  if [ -n "$previous_name" ]; then
+    new_name="$previous_name"
+  else
+    new_name="$(basename "$pane_path" 2>/dev/null || true)"
+  fi
+  new_name="$(sanitize_name "$new_name" "$max_length")"
+
+  tmux set-window-option -t "$target" -u "$owned_option" >/dev/null 2>&1 || true
+  tmux set-window-option -t "$target" -u "$previous_name_option" >/dev/null 2>&1 || true
+  tmux set-window-option -t "$target" allow-rename on >/dev/null 2>&1 || true
+
+  if [ -n "$new_name" ] && [ "$new_name" != "$current_name" ]; then
+    tmux rename-window -t "$target" "$new_name"
+  fi
+}
 
 tmux list-panes -a -F '#{session_id}	#{window_id}	#{pane_id}	#{pane_active}	#{pane_pid}	#{pane_current_path}	#{pane_title}	#{window_name}' |
 while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_cwd pane_title window_name; do
@@ -62,6 +99,8 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
 
   result="$("$detect_script" "$pane_pid" "$pane_cwd" "$pane_title" 2>/dev/null || true)"
   if [ -z "$result" ]; then
+    restore_plugin_owned_window "$window_id" "$pane_cwd" "$window_name"
+
     if [ "$restore_unnamed" = "on" ]; then
       tool_only="$(AI_SESSION_NAME_REPORT_TOOL_ONLY=1 "$detect_script" "$pane_pid" "$pane_cwd" "$pane_title" 2>/dev/null || true)"
       if [ -n "$tool_only" ]; then
@@ -115,6 +154,11 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
   new_name="$(sanitize_name "$new_name" "$max_length")"
 
   if [ -n "$new_name" ] && [ "$new_name" != "$window_name" ]; then
+    owned="$(window_option "$window_id" "$owned_option")"
+    if [ "$owned" != "1" ]; then
+      tmux set-window-option -t "$window_id" "$previous_name_option" "$window_name" >/dev/null 2>&1 || true
+    fi
+    tmux set-window-option -t "$window_id" "$owned_option" "1" >/dev/null 2>&1 || true
     tmux set-window-option -t "$window_id" allow-rename off >/dev/null 2>&1 || true
     tmux rename-window -t "$window_id" "$new_name"
   fi
