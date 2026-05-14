@@ -47,6 +47,12 @@ thread_id_from_shell_snapshot_args() {
     head -1
 }
 
+thread_id_from_resume_args() {
+  printf '%s\n' "$rows" |
+    sed -nE 's#.*(^|[[:space:]/.-])codex([[:space:]/.-]|.*[[:space:]])resume[[:space:]]+([0-9a-fA-F-]{36})([[:space:]].*)?$#\3#p' |
+    head -1
+}
+
 thread_id_from_process_logs() {
   local db="$codex_home/logs_2.sqlite"
   local pid
@@ -70,6 +76,7 @@ thread_id_from_process_logs() {
 candidate_thread_ids() {
   {
     thread_id_from_env || true
+    thread_id_from_resume_args || true
     thread_id_from_shell_snapshot_args || true
     thread_id_from_process_logs || true
   } | awk 'NF && !seen[$0]++'
