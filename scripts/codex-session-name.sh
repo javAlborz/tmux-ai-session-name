@@ -74,12 +74,20 @@ thread_id_from_process_logs() {
 }
 
 candidate_thread_ids() {
-  {
+  local authoritative
+
+  authoritative="$({
     thread_id_from_env || true
     thread_id_from_resume_args || true
     thread_id_from_shell_snapshot_args || true
-    thread_id_from_process_logs || true
-  } | awk 'NF && !seen[$0]++'
+  } | awk 'NF && !seen[$0]++')"
+
+  if [ -n "$authoritative" ]; then
+    printf '%s\n' "$authoritative"
+    return 0
+  fi
+
+  thread_id_from_process_logs | awk 'NF && !seen[$0]++'
 }
 
 sqlite_user_title_for_thread() {
