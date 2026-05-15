@@ -62,7 +62,9 @@ window_option() {
   local target="$1"
   local option="$2"
 
-  tmux show-window-option -t "$target" -qv "$option" 2>/dev/null || true
+  tmux show-option -w -t "$target" -qv "$option" 2>/dev/null ||
+    tmux show-window-option -t "$target" -v "$option" 2>/dev/null ||
+    true
 }
 
 restore_plugin_owned_window() {
