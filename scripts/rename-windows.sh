@@ -151,6 +151,7 @@ release_unresolved_plugin_owned_window() {
   fi
 }
 
+seen_ai_window_names=""
 tmux list-panes -a -F '#{session_id}	#{window_id}	#{pane_id}	#{pane_active}	#{pane_pid}	#{pane_current_path}	#{pane_title}	#{window_name}' |
 while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_cwd pane_title window_name; do
   [ "$pane_active" = "1" ] || continue
@@ -213,6 +214,18 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
   new_name="${format//\#\{tool\}/$tool}"
   new_name="${new_name//\#\{session\}/$session}"
   new_name="$(sanitize_name "$new_name" "$max_length")"
+
+  case "$seen_ai_window_names" in
+    *"
+$new_name
+"*)
+      release_unresolved_plugin_owned_window "$window_id" "$pane_cwd" "$window_name"
+      continue
+      ;;
+  esac
+  seen_ai_window_names="${seen_ai_window_names}
+$new_name
+"
 
   if [ -n "$new_name" ] && [ "$new_name" != "$window_name" ]; then
     owned="$(window_option "$window_id" "$owned_option")"
