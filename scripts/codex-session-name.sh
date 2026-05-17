@@ -54,21 +54,41 @@ thread_id_from_resume_args() {
 }
 
 thread_id_from_process_logs() {
-  local db="$codex_home/logs_2.sqlite"
+  local logs_db="$codex_home/logs_2.sqlite"
+  local state_db="$codex_home/state_5.sqlite"
   local pid
-  local thread_id
 
   command -v sqlite3 >/dev/null 2>&1 || return 1
-  [ -r "$db" ] || return 1
+  [ -r "$logs_db" ] || return 1
+  [ -r "$state_db" ] || return 1
 
   printf '%s\n' "$rows" |
   grep -Ei '(^|[ /.-])codex([ /.-]|$)|@openai/codex' |
   awk '{print $1}' |
   while read -r pid; do
     [ -n "$pid" ] || continue
-    thread_id="$(sqlite3 "$db" "select thread_id from (select thread_id, max(ts) as last_ts, max(ts_nanos) as last_ts_nanos from logs where process_uuid like 'pid:$pid:%' and thread_id is not null and thread_id != '' group by thread_id order by last_ts desc, last_ts_nanos desc limit 5);" 2>/dev/null)"
-    [ -n "$thread_id" ] || continue
-    printf '%s\n' "$thread_id"
+    sqlite3 "$logs_db" "attach database '$state_db' as state;
+      with candidates as (
+        select
+          l.thread_id,
+          max(l.ts) as last_ts,
+          max(l.ts_nanos) as last_ts_nanos
+        from logs l
+        join state.threads t on t.id = l.thread_id
+        where l.process_uuid like 'pid:$pid:%'
+          and l.thread_id is not null
+          and l.thread_id != ''
+        group by l.thread_id
+      )
+      select c.thread_id
+      from candidates c
+      join state.threads t on t.id = c.thread_id
+      order by
+        case when t.title != '' and (t.first_user_message = '' or t.title != t.first_user_message) then 0 else 1 end,
+        t.updated_at desc,
+        c.last_ts desc,
+        c.last_ts_nanos desc
+      limit 5;" 2>/dev/null
     break
   done
 }

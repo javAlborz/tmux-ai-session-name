@@ -101,11 +101,10 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
 
   result="$("$detect_script" "$pane_pid" "$pane_cwd" "$pane_title" 2>/dev/null || true)"
   if [ -z "$result" ]; then
-    restore_plugin_owned_window "$window_id" "$pane_cwd" "$window_name"
-
-    if [ "$restore_unnamed" = "on" ]; then
-      tool_only="$(AI_SESSION_NAME_REPORT_TOOL_ONLY=1 "$detect_script" "$pane_pid" "$pane_cwd" "$pane_title" 2>/dev/null || true)"
-      if [ -n "$tool_only" ]; then
+    tool_only="$(AI_SESSION_NAME_REPORT_TOOL_ONLY=1 "$detect_script" "$pane_pid" "$pane_cwd" "$pane_title" 2>/dev/null || true)"
+    if [ -n "$tool_only" ]; then
+      owned="$(window_option "$window_id" "$owned_option")"
+      if [ "$restore_unnamed" = "on" ] && [ "$owned" != "1" ]; then
         new_name="$(basename "$pane_cwd" 2>/dev/null || true)"
         [ -n "$new_name" ] || new_name="$(tmux display-message -pt "$pane_id" -p '#{pane_current_command}' 2>/dev/null || true)"
         new_name="$(sanitize_name "$new_name" "$max_length")"
@@ -115,7 +114,10 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
         fi
         continue
       fi
+      continue
     fi
+
+    restore_plugin_owned_window "$window_id" "$pane_cwd" "$window_name"
 
     generic_window_name="$(printf '%s' "$window_name" | sed -E 's/^[[:space:]]*✳[[:space:]]*//; s/[[:space:]]+/ /g; s/^ //; s/ $//' | tr '[:upper:]' '[:lower:]')"
     case "$generic_window_name" in
