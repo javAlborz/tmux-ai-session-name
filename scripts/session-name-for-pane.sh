@@ -17,8 +17,9 @@ fi
 # detection (tool<TAB>session). On hit we skip the process-tree walk and
 # the tool-specific scripts entirely.
 report_tool_only="${AI_SESSION_NAME_REPORT_TOOL_ONLY:-}"
+report_id="${AI_SESSION_NAME_REPORT_ID:-}"
 cleaned_pane_title="$(printf '%s' "$pane_title" | sed -E 's/^[[:space:]]*[^[:alnum:][:space:]]+[[:space:]]+//; s/[[:space:]]+/ /g; s/^ //; s/ $//')"
-outer_cache_key="pane|${pane_pid}|${cleaned_pane_title}"
+outer_cache_key="pane|${pane_pid}|${cleaned_pane_title}|id:${report_id}"
 
 if [ "$report_tool_only" != "1" ] && command -v cache_lookup >/dev/null 2>&1; then
   cached_value="$(cache_lookup "$outer_cache_key" 10)"
@@ -95,9 +96,17 @@ fi
 case "$tool" in
   claude)
     session="$("$script_dir/claude-session-name.sh" "$pane_pid" "$pane_cwd" "$pane_title" "$rows_with_root" || true)"
+    identity=""
     ;;
   codex)
-    session="$("$script_dir/codex-session-name.sh" "$pane_pid" "$pane_cwd" "$pane_title" "$rows_with_root" || true)"
+    session_result="$(AI_SESSION_NAME_REPORT_ID="$report_id" "$script_dir/codex-session-name.sh" "$pane_pid" "$pane_cwd" "$pane_title" "$rows_with_root" || true)"
+    if [ "$report_id" = "1" ] && printf '%s' "$session_result" | grep -q "$(printf '\t')"; then
+      identity="${session_result%%	*}"
+      session="${session_result#*	}"
+    else
+      identity=""
+      session="$session_result"
+    fi
     ;;
 esac
 
@@ -121,7 +130,11 @@ case "$generic_session" in
     ;;
 esac
 
-output="$(printf '%s\t%s' "$tool" "$session")"
+if [ "$report_id" = "1" ]; then
+  output="$(printf '%s\t%s\t%s' "$tool" "$identity" "$session")"
+else
+  output="$(printf '%s\t%s' "$tool" "$session")"
+fi
 if [ "$report_tool_only" != "1" ] && command -v cache_store >/dev/null 2>&1; then
   cache_store "$outer_cache_key" "${output//$'\t'/$'\x1f'}"
 fi

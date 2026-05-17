@@ -5,6 +5,7 @@ pane_pid="${1:-}"
 pane_cwd="${2:-}"
 _pane_title="${3:-}"
 rows="${4:-}"
+report_id="${AI_SESSION_NAME_REPORT_ID:-}"
 
 codex_home="${CODEX_HOME:-$HOME/.codex}"
 
@@ -16,7 +17,7 @@ fi
 
 state_db_mtime="$(stat -c %Y "$codex_home/state_5.sqlite" 2>/dev/null || printf '0\n')"
 logs_db_mtime="$(stat -c %Y "$codex_home/logs_2.sqlite" 2>/dev/null || printf '0\n')"
-cache_key="codex|${pane_pid}|${state_db_mtime}|${logs_db_mtime}"
+cache_key="codex|${pane_pid}|${state_db_mtime}|${logs_db_mtime}|id:${report_id}"
 
 if command -v cache_lookup >/dev/null 2>&1; then
   cached_value="$(cache_lookup "$cache_key" 30)"
@@ -126,19 +127,28 @@ sqlite_user_title_for_thread() {
 }
 
 title=""
+selected_thread_id=""
 candidates="$(candidate_thread_ids || true)"
 while read -r thread_id; do
   [ -n "$thread_id" ] || continue
   title="$(sqlite_user_title_for_thread "$thread_id" || true)"
-  [ -n "$title" ] && break
+  if [ -n "$title" ]; then
+    selected_thread_id="$thread_id"
+    break
+  fi
 done <<<"$candidates"
 
-if command -v cache_store >/dev/null 2>&1; then
-  cache_store "$cache_key" "$title"
+output="$title"
+if [ -n "$title" ] && [ "$report_id" = "1" ]; then
+  output="$(printf '%s\t%s' "$selected_thread_id" "$title")"
 fi
 
-if [ -n "$title" ]; then
-  printf '%s\n' "$title"
+if command -v cache_store >/dev/null 2>&1; then
+  cache_store "$cache_key" "$output"
+fi
+
+if [ -n "$output" ]; then
+  printf '%s\n' "$output"
   exit 0
 fi
 
