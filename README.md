@@ -29,6 +29,7 @@ set -g @ai-session-name-format '#{session}'
 set -g @ai-session-name-max-length '60'
 set -g @ai-session-name-restore 'off'
 set -g @ai-session-name-restore-unnamed 'off'
+set -g @ai-session-name-release-unnamed-after '60'
 set -g @ai-session-name-fallback ''
 ```
 
@@ -40,6 +41,11 @@ tmux windows.
 explicit name back to the active pane directory basename. It defaults to off
 because Codex process trees can change while a session is active, and aggressive
 restore can race explicitly named sessions.
+
+`@ai-session-name-release-unnamed-after` controls how long, in seconds, a
+plugin-owned window with a still-running AI process but no resolvable explicit
+session name is kept before ownership is released and the previous window name is
+restored. Set it to `0` to never release these transient misses.
 
 ## Detection
 

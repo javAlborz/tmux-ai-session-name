@@ -55,8 +55,14 @@ format="$(tmux_option "@ai-session-name-format" "#{tool}: #{session}")"
 restore="$(tmux_option "@ai-session-name-restore" "off")"
 fallback="$(tmux_option "@ai-session-name-fallback" "")"
 restore_unnamed="$(tmux_option "@ai-session-name-restore-unnamed" "on")"
+release_unnamed_after="$(tmux_option "@ai-session-name-release-unnamed-after" "60")"
+case "$release_unnamed_after" in
+  ''|*[!0-9]*) release_unnamed_after=60 ;;
+esac
 owned_option="@ai-session-name-owned"
 previous_name_option="@ai-session-name-previous-name"
+current_name_option="@ai-session-name-current-name"
+unresolved_since_option="@ai-session-name-unresolved-since"
 
 window_option() {
   local target="$1"
@@ -88,10 +94,60 @@ restore_plugin_owned_window() {
 
   tmux set-window-option -t "$target" -u "$owned_option" >/dev/null 2>&1 || true
   tmux set-window-option -t "$target" -u "$previous_name_option" >/dev/null 2>&1 || true
+  tmux set-window-option -t "$target" -u "$current_name_option" >/dev/null 2>&1 || true
+  tmux set-window-option -t "$target" -u "$unresolved_since_option" >/dev/null 2>&1 || true
   tmux set-window-option -t "$target" allow-rename on >/dev/null 2>&1 || true
 
   if [ -n "$new_name" ] && [ "$new_name" != "$current_name" ]; then
     tmux rename-window -t "$target" "$new_name"
+  fi
+}
+
+release_unresolved_plugin_owned_window() {
+  local target="$1"
+  local pane_path="$2"
+  local current_name="$3"
+  local owned
+  local previous_name
+  local plugin_name
+  local unresolved_since
+  local now
+  local new_name
+
+  owned="$(window_option "$target" "$owned_option")"
+  [ "$owned" = "1" ] || return 0
+  [ "$release_unnamed_after" -gt 0 ] || return 0
+
+  now="$(date +%s)"
+  unresolved_since="$(window_option "$target" "$unresolved_since_option")"
+  case "$unresolved_since" in
+    ''|*[!0-9]*)
+      tmux set-window-option -t "$target" "$unresolved_since_option" "$now" >/dev/null 2>&1 || true
+      return 0
+      ;;
+  esac
+
+  [ $((now - unresolved_since)) -ge "$release_unnamed_after" ] || return 0
+
+  previous_name="$(window_option "$target" "$previous_name_option")"
+  plugin_name="$(window_option "$target" "$current_name_option")"
+  if [ -n "$previous_name" ]; then
+    new_name="$previous_name"
+  else
+    new_name="$(basename "$pane_path" 2>/dev/null || true)"
+  fi
+  new_name="$(sanitize_name "$new_name" "$max_length")"
+
+  tmux set-window-option -t "$target" -u "$owned_option" >/dev/null 2>&1 || true
+  tmux set-window-option -t "$target" -u "$previous_name_option" >/dev/null 2>&1 || true
+  tmux set-window-option -t "$target" -u "$current_name_option" >/dev/null 2>&1 || true
+  tmux set-window-option -t "$target" -u "$unresolved_since_option" >/dev/null 2>&1 || true
+  tmux set-window-option -t "$target" allow-rename on >/dev/null 2>&1 || true
+
+  if [ -n "$new_name" ] && [ "$new_name" != "$current_name" ]; then
+    if [ -z "$plugin_name" ] || [ "$current_name" = "$plugin_name" ]; then
+      tmux rename-window -t "$target" "$new_name"
+    fi
   fi
 }
 
@@ -114,6 +170,7 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
         fi
         continue
       fi
+      release_unresolved_plugin_owned_window "$window_id" "$pane_cwd" "$window_name"
       continue
     fi
 
@@ -163,6 +220,8 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
       tmux set-window-option -t "$window_id" "$previous_name_option" "$window_name" >/dev/null 2>&1 || true
     fi
     tmux set-window-option -t "$window_id" "$owned_option" "1" >/dev/null 2>&1 || true
+    tmux set-window-option -t "$window_id" "$current_name_option" "$new_name" >/dev/null 2>&1 || true
+    tmux set-window-option -t "$window_id" -u "$unresolved_since_option" >/dev/null 2>&1 || true
     tmux set-window-option -t "$window_id" allow-rename off >/dev/null 2>&1 || true
     tmux rename-window -t "$window_id" "$new_name"
   fi

@@ -66,8 +66,10 @@ thread_id_from_process_logs() {
   grep -Ei '(^|[ /.-])codex([ /.-]|$)|@openai/codex' |
   awk '{print $1}' |
   while read -r pid; do
+    local candidate_thread_ids
+
     [ -n "$pid" ] || continue
-    sqlite3 "$logs_db" "attach database '$state_db' as state;
+    candidate_thread_ids="$(sqlite3 "$logs_db" "attach database '$state_db' as state;
       with candidates as (
         select
           l.thread_id,
@@ -88,7 +90,9 @@ thread_id_from_process_logs() {
         t.updated_at desc,
         c.last_ts desc,
         c.last_ts_nanos desc
-      limit 5;" 2>/dev/null
+      limit 5;" 2>/dev/null)"
+    [ -n "$candidate_thread_ids" ] || continue
+    printf '%s\n' "$candidate_thread_ids"
     break
   done
 }
