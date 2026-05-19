@@ -209,9 +209,18 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
     continue
   fi
 
-  IFS=$'\t' read -r tool identity session <<EOF
-$result
-EOF
+  tool="${result%%	*}"
+  rest="${result#*	}"
+  if [ "$rest" = "$result" ]; then
+    identity=""
+    session=""
+  else
+    identity="${rest%%	*}"
+    session="${rest#*	}"
+    if [ "$session" = "$rest" ]; then
+      session=""
+    fi
+  fi
   [ -n "$tool" ] || continue
   [ -n "$session" ] || session="$tool"
 
