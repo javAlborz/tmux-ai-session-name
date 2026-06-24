@@ -17,7 +17,8 @@ fi
 
 state_db_mtime="$(stat -c %Y "$codex_home/state_5.sqlite" 2>/dev/null || printf '0\n')"
 logs_db_mtime="$(stat -c %Y "$codex_home/logs_2.sqlite" 2>/dev/null || printf '0\n')"
-cache_key="codex|${pane_pid}|${state_db_mtime}|${logs_db_mtime}|id:${report_id}"
+session_index_mtime="$(stat -c %Y "$codex_home/session_index.jsonl" 2>/dev/null || printf '0\n')"
+cache_key="codex|${pane_pid}|${state_db_mtime}|${logs_db_mtime}|${session_index_mtime}|id:${report_id}"
 
 if command -v cache_lookup >/dev/null 2>&1; then
   cached_value="$(cache_lookup "$cache_key" 30)"
@@ -126,12 +127,56 @@ sqlite_user_title_for_thread() {
     head -1
 }
 
+sqlite_first_user_message_for_thread() {
+  local thread_id="$1"
+  local db="$codex_home/state_5.sqlite"
+
+  command -v sqlite3 >/dev/null 2>&1 || return 1
+  [ -r "$db" ] || return 1
+
+  sqlite3 "$db" "select first_user_message from threads where id = '$thread_id' limit 1;" 2>/dev/null |
+    head -1
+}
+
+session_index_title_for_thread() {
+  local thread_id="$1"
+  local index_file="$codex_home/session_index.jsonl"
+  local title
+  local first_user_message
+
+  [ -r "$index_file" ] || return 1
+
+  title="$(awk -v id="$thread_id" '
+    index($0, "\"id\":\"" id "\"") { line = $0 }
+    END {
+      if (line == "") {
+        exit
+      }
+      if (match(line, /"thread_name":"([^"\\]|\\.)*"/)) {
+        value = substr(line, RSTART + 15, RLENGTH - 16)
+        gsub(/\\"/, "\"", value)
+        gsub(/\\\\/, "\\", value)
+        print value
+      }
+    }
+  ' "$index_file" 2>/dev/null | head -1)"
+  [ -n "$title" ] || return 1
+
+  first_user_message="$(sqlite_first_user_message_for_thread "$thread_id" || true)"
+  if [ -n "$first_user_message" ] && [ "$title" = "$first_user_message" ]; then
+    return 1
+  fi
+
+  printf '%s\n' "$title"
+}
+
 title=""
 selected_thread_id=""
 candidates="$(candidate_thread_ids || true)"
 while read -r thread_id; do
   [ -n "$thread_id" ] || continue
-  title="$(sqlite_user_title_for_thread "$thread_id" || true)"
+  title="$(session_index_title_for_thread "$thread_id" || true)"
+  [ -n "$title" ] || title="$(sqlite_user_title_for_thread "$thread_id" || true)"
   if [ -n "$title" ]; then
     selected_thread_id="$thread_id"
     break
