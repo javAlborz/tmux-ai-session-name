@@ -9,6 +9,13 @@ detect_script="$plugin_dir/scripts/session-name-for-pane.sh"
 state_dir="${TMPDIR:-/tmp}"
 server_pid="$(tmux display-message -p '#{pid}' 2>/dev/null || echo standalone)"
 
+lock_dir="${AI_SESSION_NAME_LOCK_DIR:-/tmp}"
+lock_file="$lock_dir/tmux-ai-session-name.${server_pid}.rename.lock"
+exec 8>"$lock_file"
+if command -v flock >/dev/null 2>&1; then
+  flock -n 8 || exit 0
+fi
+
 if [ -z "${AI_SESSION_NAME_CACHE_FILE:-}" ]; then
   AI_SESSION_NAME_CACHE_FILE="$state_dir/tmux-ai-session-name.${server_pid}.cache"
 fi
@@ -54,10 +61,10 @@ esac
 format="$(tmux_option "@ai-session-name-format" "#{tool}: #{session}")"
 restore="$(tmux_option "@ai-session-name-restore" "off")"
 fallback="$(tmux_option "@ai-session-name-fallback" "")"
-restore_unnamed="$(tmux_option "@ai-session-name-restore-unnamed" "on")"
-release_unnamed_after="$(tmux_option "@ai-session-name-release-unnamed-after" "60")"
+restore_unnamed="$(tmux_option "@ai-session-name-restore-unnamed" "off")"
+release_unnamed_after="$(tmux_option "@ai-session-name-release-unnamed-after" "0")"
 case "$release_unnamed_after" in
-  ''|*[!0-9]*) release_unnamed_after=60 ;;
+  ''|*[!0-9]*) release_unnamed_after=0 ;;
 esac
 owned_option="@ai-session-name-owned"
 previous_name_option="@ai-session-name-previous-name"
@@ -154,7 +161,6 @@ release_unresolved_plugin_owned_window() {
   fi
 }
 
-seen_ai_identities=""
 tmux list-panes -a -F '#{session_id}	#{window_id}	#{pane_id}	#{pane_active}	#{pane_pid}	#{pane_current_path}	#{pane_title}	#{window_name}' |
 while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_cwd pane_title window_name; do
   [ "$pane_active" = "1" ] || continue
@@ -175,6 +181,11 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
         continue
       fi
       release_unresolved_plugin_owned_window "$window_id" "$pane_cwd" "$window_name"
+      continue
+    fi
+
+    owned="$(window_option "$window_id" "$owned_option")"
+    if [ "$owned" = "1" ]; then
       continue
     fi
 
@@ -227,21 +238,6 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
   new_name="${format//\#\{tool\}/$tool}"
   new_name="${new_name//\#\{session\}/$session}"
   new_name="$(sanitize_name "$new_name" "$max_length")"
-
-  claim_key="$identity"
-  [ -n "$claim_key" ] || claim_key="$tool:$new_name"
-
-  case "$seen_ai_identities" in
-    *"
-$claim_key
-"*)
-      release_unresolved_plugin_owned_window "$window_id" "$pane_cwd" "$window_name"
-      continue
-      ;;
-  esac
-  seen_ai_identities="${seen_ai_identities}
-$claim_key
-"
 
   if [ -n "$new_name" ]; then
     owned="$(window_option "$window_id" "$owned_option")"

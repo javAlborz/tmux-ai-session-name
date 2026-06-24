@@ -29,7 +29,7 @@ set -g @ai-session-name-format '#{session}'
 set -g @ai-session-name-max-length '60'
 set -g @ai-session-name-restore 'off'
 set -g @ai-session-name-restore-unnamed 'off'
-set -g @ai-session-name-release-unnamed-after '60'
+set -g @ai-session-name-release-unnamed-after '0'
 set -g @ai-session-name-fallback ''
 ```
 
@@ -45,7 +45,8 @@ restore can race explicitly named sessions.
 `@ai-session-name-release-unnamed-after` controls how long, in seconds, a
 plugin-owned window with a still-running AI process but no resolvable explicit
 session name is kept before ownership is released and the previous window name is
-restored. Set it to `0` to never release these transient misses.
+restored. It defaults to `0`, so transient misses keep the last resolved agent
+session name.
 
 ## Detection
 
