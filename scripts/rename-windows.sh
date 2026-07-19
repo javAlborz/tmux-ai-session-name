@@ -62,7 +62,7 @@ format="$(tmux_option "@ai-session-name-format" "#{tool}: #{session}")"
 restore="$(tmux_option "@ai-session-name-restore" "off")"
 fallback="$(tmux_option "@ai-session-name-fallback" "")"
 restore_unnamed="$(tmux_option "@ai-session-name-restore-unnamed" "off")"
-release_unnamed_after="$(tmux_option "@ai-session-name-release-unnamed-after" "0")"
+release_unnamed_after="$(tmux_option "@ai-session-name-release-unnamed-after" "10")"
 case "$release_unnamed_after" in
   ''|*[!0-9]*) release_unnamed_after=0 ;;
 esac
@@ -112,6 +112,13 @@ restore_plugin_owned_window() {
   fi
 }
 
+identity_owned_by_other_window() {
+  local target="$1"
+  local identity="$2"
+  [ -n "$identity" ] || return 1
+  tmux list-windows -a -F "#{window_id} #{@ai-session-name-thread-id}" 2>/dev/null |
+    grep -Fv "$target " | grep -Fq " $identity"
+}
 release_unresolved_plugin_owned_window() {
   local target="$1"
   local pane_path="$2"
@@ -164,6 +171,12 @@ release_unresolved_plugin_owned_window() {
 tmux list-panes -a -F '#{session_id}	#{window_id}	#{pane_id}	#{pane_active}	#{pane_pid}	#{pane_current_path}	#{pane_title}	#{window_name}' |
 while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_cwd pane_title window_name; do
   [ "$pane_active" = "1" ] || continue
+  owned="$(window_option "$window_id" "$owned_option")"
+  existing_identity="$(window_option "$window_id" "$thread_id_option")"
+  if [ "$owned" = "1" ] && [ -n "$existing_identity" ] && identity_owned_by_other_window "$window_id" "$existing_identity"; then
+    restore_plugin_owned_window "$window_id" "$pane_cwd" "$window_name"
+    continue
+  fi
 
   result="$(AI_SESSION_NAME_REPORT_ID=1 "$detect_script" "$pane_pid" "$pane_cwd" "$pane_title" 2>/dev/null || true)"
   if [ -z "$result" ]; then
@@ -238,11 +251,27 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
   new_name="${format//\#\{tool\}/$tool}"
   new_name="${new_name//\#\{session\}/$session}"
   new_name="$(sanitize_name "$new_name" "$max_length")"
+  if [ -n "$identity" ] && identity_owned_by_other_window "$window_id" "$identity"; then
+    restore_plugin_owned_window "$window_id" "$pane_cwd" "$window_name"
+    continue
+  fi
 
   if [ -n "$new_name" ]; then
     owned="$(window_option "$window_id" "$owned_option")"
     if [ "$owned" != "1" ]; then
       tmux set-window-option -t "$window_id" "$previous_name_option" "$window_name" >/dev/null 2>&1 || true
+    elif [ -n "$identity" ]; then
+      previous_identity="$(window_option "$window_id" "$thread_id_option")"
+      if [ -n "$previous_identity" ] && [ "$previous_identity" != "$identity" ]; then
+        plugin_name="$(window_option "$window_id" "$current_name_option")"
+        if [ -n "$plugin_name" ] && [ "$window_name" = "$plugin_name" ]; then
+          previous_name="$(basename "$pane_cwd" 2>/dev/null || true)"
+          previous_name="$(sanitize_name "$previous_name" "$max_length")"
+          [ -n "$previous_name" ] && tmux set-window-option -t "$window_id" "$previous_name_option" "$previous_name" >/dev/null 2>&1 || true
+        else
+          tmux set-window-option -t "$window_id" "$previous_name_option" "$window_name" >/dev/null 2>&1 || true
+        fi
+      fi
     fi
     tmux set-window-option -t "$window_id" "$owned_option" "1" >/dev/null 2>&1 || true
     tmux set-window-option -t "$window_id" "$current_name_option" "$new_name" >/dev/null 2>&1 || true
