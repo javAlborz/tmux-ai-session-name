@@ -102,10 +102,16 @@ case "$tool" in
     session_result="$(AI_SESSION_NAME_REPORT_ID="$report_id" "$script_dir/codex-session-name.sh" "$pane_pid" "$pane_cwd" "$pane_title" "$rows_with_root" || true)"
     if [ "$report_id" = "1" ] && printf '%s' "$session_result" | grep -q "$(printf '\t')"; then
       identity="${session_result%%	*}"
-      session="${session_result#*	}"
+      rest="${session_result#*	}"
+      session="${rest%%	*}"
+      confidence="${rest#*	}"
+      if [ "$confidence" = "$rest" ]; then
+        confidence=""
+      fi
     else
       identity=""
       session="$session_result"
+      confidence=""
     fi
     ;;
 esac
@@ -131,7 +137,11 @@ case "$generic_session" in
 esac
 
 if [ "$report_id" = "1" ]; then
-  output="$(printf '%s\t%s\t%s' "$tool" "$identity" "$session")"
+  if [ -n "${confidence:-}" ]; then
+    output="$(printf '%s\t%s\t%s\t%s' "$tool" "$identity" "$session" "$confidence")"
+  else
+    output="$(printf '%s\t%s\t%s' "$tool" "$identity" "$session")"
+  fi
 else
   output="$(printf '%s\t%s' "$tool" "$session")"
 fi

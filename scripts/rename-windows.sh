@@ -66,11 +66,18 @@ release_unnamed_after="$(tmux_option "@ai-session-name-release-unnamed-after" "1
 case "$release_unnamed_after" in
   ''|*[!0-9]*) release_unnamed_after=0 ;;
 esac
+debounce_ticks="$(tmux_option "@ai-session-name-debounce-ticks" "2")"
+case "$debounce_ticks" in
+  ''|*[!0-9]*) debounce_ticks=2 ;;
+esac
 owned_option="@ai-session-name-owned"
 previous_name_option="@ai-session-name-previous-name"
 current_name_option="@ai-session-name-current-name"
 thread_id_option="@ai-session-name-thread-id"
 unresolved_since_option="@ai-session-name-unresolved-since"
+pending_name_option="@ai-session-name-pending-name"
+pending_thread_id_option="@ai-session-name-pending-thread-id"
+pending_count_option="@ai-session-name-pending-count"
 
 window_option() {
   local target="$1"
@@ -105,6 +112,9 @@ restore_plugin_owned_window() {
   tmux set-window-option -t "$target" -u "$current_name_option" >/dev/null 2>&1 || true
   tmux set-window-option -t "$target" -u "$thread_id_option" >/dev/null 2>&1 || true
   tmux set-window-option -t "$target" -u "$unresolved_since_option" >/dev/null 2>&1 || true
+  tmux set-window-option -t "$target" -u "$pending_name_option" >/dev/null 2>&1 || true
+  tmux set-window-option -t "$target" -u "$pending_thread_id_option" >/dev/null 2>&1 || true
+  tmux set-window-option -t "$target" -u "$pending_count_option" >/dev/null 2>&1 || true
   tmux set-window-option -t "$target" allow-rename on >/dev/null 2>&1 || true
 
   if [ -n "$new_name" ] && [ "$new_name" != "$current_name" ]; then
@@ -119,6 +129,60 @@ identity_owned_by_other_window() {
   tmux list-windows -a -F "#{window_id} #{@ai-session-name-thread-id}" 2>/dev/null |
     grep -Fv "$target " | grep -Fq " $identity"
 }
+
+clear_pending_candidate() {
+  local target="$1"
+
+  tmux set-window-option -t "$target" -u "$pending_name_option" >/dev/null 2>&1 || true
+  tmux set-window-option -t "$target" -u "$pending_thread_id_option" >/dev/null 2>&1 || true
+  tmux set-window-option -t "$target" -u "$pending_count_option" >/dev/null 2>&1 || true
+}
+
+weak_candidate_ready() {
+  local target="$1"
+  local identity="$2"
+  local name="$3"
+  local confidence="$4"
+  local owned
+  local current_name
+  local current_identity
+  local pending_name
+  local pending_identity
+  local pending_count
+
+  if [ "$confidence" != "weak" ] || [ "$debounce_ticks" -le 1 ]; then
+    clear_pending_candidate "$target"
+    return 0
+  fi
+
+  owned="$(window_option "$target" "$owned_option")"
+  current_name="$(window_option "$target" "$current_name_option")"
+  current_identity="$(window_option "$target" "$thread_id_option")"
+  if [ "$owned" = "1" ] && [ "$current_name" = "$name" ] && { [ -z "$identity" ] || [ "$current_identity" = "$identity" ]; }; then
+    clear_pending_candidate "$target"
+    return 0
+  fi
+
+  pending_name="$(window_option "$target" "$pending_name_option")"
+  pending_identity="$(window_option "$target" "$pending_thread_id_option")"
+  pending_count="$(window_option "$target" "$pending_count_option")"
+  case "$pending_count" in
+    ''|*[!0-9]*) pending_count=0 ;;
+  esac
+
+  if [ "$pending_name" = "$name" ] && [ "$pending_identity" = "$identity" ]; then
+    pending_count=$((pending_count + 1))
+  else
+    pending_count=1
+  fi
+
+  tmux set-window-option -t "$target" "$pending_name_option" "$name" >/dev/null 2>&1 || true
+  tmux set-window-option -t "$target" "$pending_thread_id_option" "$identity" >/dev/null 2>&1 || true
+  tmux set-window-option -t "$target" "$pending_count_option" "$pending_count" >/dev/null 2>&1 || true
+
+  [ "$pending_count" -ge "$debounce_ticks" ]
+}
+
 release_unresolved_plugin_owned_window() {
   local target="$1"
   local pane_path="$2"
@@ -159,6 +223,9 @@ release_unresolved_plugin_owned_window() {
   tmux set-window-option -t "$target" -u "$current_name_option" >/dev/null 2>&1 || true
   tmux set-window-option -t "$target" -u "$thread_id_option" >/dev/null 2>&1 || true
   tmux set-window-option -t "$target" -u "$unresolved_since_option" >/dev/null 2>&1 || true
+  tmux set-window-option -t "$target" -u "$pending_name_option" >/dev/null 2>&1 || true
+  tmux set-window-option -t "$target" -u "$pending_thread_id_option" >/dev/null 2>&1 || true
+  tmux set-window-option -t "$target" -u "$pending_count_option" >/dev/null 2>&1 || true
   tmux set-window-option -t "$target" allow-rename on >/dev/null 2>&1 || true
 
   if [ -n "$new_name" ] && [ "$new_name" != "$current_name" ]; then
@@ -238,10 +305,17 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
   if [ "$rest" = "$result" ]; then
     identity=""
     session=""
+    confidence=""
   else
     identity="${rest%%	*}"
-    session="${rest#*	}"
+    rest="${rest#*	}"
+    session="${rest%%	*}"
     if [ "$session" = "$rest" ]; then
+      confidence=""
+    else
+      confidence="${rest#*	}"
+    fi
+    if [ -z "$session" ]; then
       session=""
     fi
   fi
@@ -253,6 +327,9 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
   new_name="$(sanitize_name "$new_name" "$max_length")"
   if [ -n "$identity" ] && identity_owned_by_other_window "$window_id" "$identity"; then
     restore_plugin_owned_window "$window_id" "$pane_cwd" "$window_name"
+    continue
+  fi
+  if ! weak_candidate_ready "$window_id" "$identity" "$new_name" "${confidence:-}"; then
     continue
   fi
 
@@ -281,6 +358,7 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
       tmux set-window-option -t "$window_id" -u "$thread_id_option" >/dev/null 2>&1 || true
     fi
     tmux set-window-option -t "$window_id" -u "$unresolved_since_option" >/dev/null 2>&1 || true
+    clear_pending_candidate "$window_id"
     tmux set-window-option -t "$window_id" allow-rename off >/dev/null 2>&1 || true
     if [ "$new_name" != "$window_name" ]; then
       tmux rename-window -t "$window_id" "$new_name"

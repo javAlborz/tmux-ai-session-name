@@ -99,7 +99,7 @@ thread_id_from_process_logs() {
   done
 }
 
-candidate_thread_ids() {
+candidate_thread_refs() {
   local authoritative
 
   authoritative="$({
@@ -109,11 +109,11 @@ candidate_thread_ids() {
   } | awk 'NF && !seen[$0]++')"
 
   if [ -n "$authoritative" ]; then
-    printf '%s\n' "$authoritative"
+    printf '%s\n' "$authoritative" | awk 'NF { print "strong\t" $0 }'
     return 0
   fi
 
-  thread_id_from_process_logs | awk 'NF && !seen[$0]++'
+  thread_id_from_process_logs | awk 'NF && !seen[$0]++ { print "weak\t" $0 }'
 }
 
 sqlite_user_title_for_thread() {
@@ -172,20 +172,22 @@ session_index_title_for_thread() {
 
 title=""
 selected_thread_id=""
-candidates="$(candidate_thread_ids || true)"
-while read -r thread_id; do
+selected_confidence=""
+candidates="$(candidate_thread_refs || true)"
+while IFS=$'\t' read -r confidence thread_id; do
   [ -n "$thread_id" ] || continue
   title="$(session_index_title_for_thread "$thread_id" || true)"
   [ -n "$title" ] || title="$(sqlite_user_title_for_thread "$thread_id" || true)"
   if [ -n "$title" ]; then
     selected_thread_id="$thread_id"
+    selected_confidence="$confidence"
     break
   fi
 done <<<"$candidates"
 
 output="$title"
 if [ -n "$title" ] && [ "$report_id" = "1" ]; then
-  output="$(printf '%s\t%s' "$selected_thread_id" "$title")"
+  output="$(printf '%s\t%s\t%s' "$selected_thread_id" "$title" "$selected_confidence")"
 fi
 
 if command -v cache_store >/dev/null 2>&1; then
