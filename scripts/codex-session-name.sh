@@ -24,7 +24,7 @@ if command -v cache_lookup >/dev/null 2>&1; then
   cached_value="$(cache_lookup "$cache_key" 30)"
   cache_rc=$?
   if [ "$cache_rc" -eq 0 ]; then
-    printf '%s\n' "$cached_value"
+    printf '%s\n' "${cached_value//$'\x1f'/$'\t'}"
     exit 0
   elif [ "$cache_rc" -eq 2 ]; then
     exit 1
@@ -191,7 +191,7 @@ if [ -n "$title" ] && [ "$report_id" = "1" ]; then
 fi
 
 if command -v cache_store >/dev/null 2>&1; then
-  cache_store "$cache_key" "$output"
+  cache_store "$cache_key" "${output//$'\t'/$'\x1f'}"
 fi
 
 if [ -n "$output" ]; then
