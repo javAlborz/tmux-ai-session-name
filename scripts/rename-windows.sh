@@ -90,6 +90,20 @@ window_option() {
     true
 }
 
+automatic_rename_state() {
+  local target="$1"
+  local local_value
+  local global_value
+
+  local_value="$(tmux show-option -w -t "$target" -qv automatic-rename 2>/dev/null || true)"
+  if [ -n "$local_value" ]; then
+    printf '%s\n' "$local_value"
+    return 0
+  fi
+  global_value="$(tmux show-window-option -g -v automatic-rename 2>/dev/null || printf 'on\n')"
+  printf 'inherit:%s\n' "${global_value:-on}"
+}
+
 restore_plugin_owned_window() {
   local target="$1"
   local pane_path="$2"
@@ -99,6 +113,7 @@ restore_plugin_owned_window() {
   local previous_auto
   local plugin_name
   local new_name
+  local pane_command
 
   owned="$(window_option "$target" "$owned_option")"
   [ "$owned" = "1" ] || return 0
@@ -134,6 +149,9 @@ restore_plugin_owned_window() {
     tmux rename-window -t "$target" "$new_name"
   fi
   case "$previous_auto" in
+    inherit:*)
+      tmux set-window-option -t "$target" -u automatic-rename >/dev/null 2>&1 || true
+      ;;
     1|on)
       tmux set-window-option -t "$target" automatic-rename on >/dev/null 2>&1 || true
       ;;
@@ -142,9 +160,11 @@ restore_plugin_owned_window() {
       ;;
     *)
       # Migration for windows claimed by older plugin versions, which saved
-      # only the previous name. Directory-basename names were automatic.
-      if [ -n "$previous_name" ] && [ "$previous_name" = "$(basename "$pane_path" 2>/dev/null || true)" ]; then
-        tmux set-window-option -t "$target" automatic-rename on >/dev/null 2>&1 || true
+      # only the previous name. Directory and command names were automatic.
+      pane_command="$(tmux display-message -pt "$target" -p '#{pane_current_command}' 2>/dev/null || true)"
+      if [ -n "$previous_name" ] &&
+        { [ "$previous_name" = "$(basename "$pane_path" 2>/dev/null || true)" ] || [ "$previous_name" = "$pane_command" ]; }; then
+        tmux set-window-option -t "$target" -u automatic-rename >/dev/null 2>&1 || true
       fi
       ;;
   esac
@@ -239,6 +259,7 @@ release_unresolved_plugin_owned_window() {
   local unresolved_since
   local now
   local new_name
+  local pane_command
 
   owned="$(window_option "$target" "$owned_option")"
   [ "$owned" = "1" ] || return 0
@@ -284,11 +305,14 @@ release_unresolved_plugin_owned_window() {
     tmux set-window-option -t "$target" automatic-rename off >/dev/null 2>&1 || true
   else
     case "$previous_auto" in
+      inherit:*) tmux set-window-option -t "$target" -u automatic-rename >/dev/null 2>&1 || true ;;
       1|on) tmux set-window-option -t "$target" automatic-rename on >/dev/null 2>&1 || true ;;
       0|off) tmux set-window-option -t "$target" automatic-rename off >/dev/null 2>&1 || true ;;
       *)
-        if [ -n "$previous_name" ] && [ "$previous_name" = "$(basename "$pane_path" 2>/dev/null || true)" ]; then
-          tmux set-window-option -t "$target" automatic-rename on >/dev/null 2>&1 || true
+        pane_command="$(tmux display-message -pt "$target" -p '#{pane_current_command}' 2>/dev/null || true)"
+        if [ -n "$previous_name" ] &&
+          { [ "$previous_name" = "$(basename "$pane_path" 2>/dev/null || true)" ] || [ "$previous_name" = "$pane_command" ]; }; then
+          tmux set-window-option -t "$target" -u automatic-rename >/dev/null 2>&1 || true
         fi
         ;;
     esac
@@ -412,7 +436,7 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
     owned="$(window_option "$window_id" "$owned_option")"
     if [ "$owned" != "1" ]; then
       tmux set-window-option -t "$window_id" "$previous_name_option" "$window_name" >/dev/null 2>&1 || true
-      previous_auto="$(window_option "$window_id" "automatic-rename")"
+      previous_auto="$(automatic_rename_state "$window_id")"
       tmux set-window-option -t "$window_id" "$previous_auto_option" "$previous_auto" >/dev/null 2>&1 || true
     elif [ -n "$identity" ]; then
       previous_identity="$(window_option "$window_id" "$thread_id_option")"

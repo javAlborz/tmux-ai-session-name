@@ -118,7 +118,6 @@ tmux set-option -g @ai-session-name-format '#{session}'
 tmux set-option -g @ai-session-name-restore on
 tmux set-option -g @ai-session-name-release-unnamed-after 1
 tmux set-option -g @ai-session-name-debounce-ticks 1
-tmux set-window-option -t "$session_name:" automatic-rename on
 
 live_sessions="$tmp_dir/live-sessions"
 live_file="$live_sessions/live.jsonl"
@@ -169,8 +168,10 @@ rm -f "$cache_file"
 "$renamer"
 assert_eq "bash" "$(tmux display-message -pt "$session_name:" '#{window_name}')" \
   "finished task restores command fallback"
-assert_eq "on" "$(tmux show-window-option -t "$session_name:" -v automatic-rename)" \
-  "finished task restores automatic naming"
+assert_eq "on" "$(tmux show-window-option -g -v automatic-rename)" \
+  "finished task returns to enabled global automatic naming"
+assert_eq "" "$(tmux show-option -w -t "$session_name:" -qv automatic-rename)" \
+  "finished task restores inherited automatic naming"
 
 start_live_task
 rm -f "$cache_file"
