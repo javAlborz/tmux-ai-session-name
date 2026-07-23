@@ -1,10 +1,10 @@
 # tmux-ai-session-name
 
-Rename tmux windows from explicitly named Claude Code or Codex sessions.
+Rename tmux windows from explicitly named coding sessions.
 
-The plugin watches the active pane in each tmux window. If it sees Claude Code or
-Codex in the pane's process tree, it tries to resolve a user-provided session
-name and renames the window.
+The plugin watches the active pane in each tmux window. It resolves explicit
+session names from Claude Code, Codex, and clients that expose the generic JSONL
+session-directory contract described below.
 
 ## Install
 
@@ -35,13 +35,14 @@ set -g @ai-session-name-fallback ''
 ```
 
 `@ai-session-name-restore` renames a window back when the active pane is no
-longer Claude or Codex. By default it is off because many people manually name
-tmux windows.
+longer a supported client. It restores both the previous name and the previous
+`automatic-rename` state. By default it is off because many people manually
+name tmux windows.
 
-`@ai-session-name-restore-unnamed` can rename Claude/Codex windows without an
-explicit name back to the active pane directory basename. It defaults to off
-because Codex process trees can change while a session is active, and aggressive
-restore can race explicitly named sessions.
+`@ai-session-name-restore-unnamed` can rename supported-client windows without
+an explicit name to the active pane command. It defaults to off because process
+trees can change while a session is active, and aggressive restore can race
+explicitly named sessions.
 
 `@ai-session-name-release-unnamed-after` controls how long, in seconds, a
 plugin-owned window with a still-running AI process but no resolvable explicit
@@ -50,9 +51,15 @@ restored. It defaults to `10`, so transient misses keep the last resolved agent
 session name briefly before releasing stale ownership.
 
 `@ai-session-name-debounce-ticks` controls how many consecutive daemon passes a
-weak Codex match must survive before it can rename a window. It defaults to `2`.
-Strong Codex matches from explicit process identity and Claude Code names are not
+weak match must survive before it can rename a window. It defaults to `2`.
+Strong matches from explicit process identity and Claude Code names are not
 debounced.
+
+The plugin does not change tmux's `allow-rename` option. When it claims a window,
+it remembers the current name and `automatic-rename` state, then pauses automatic
+naming. When it releases the window, it restores both. A manual `rename-window`
+while the plugin owns a window releases ownership and wins until that detected
+session goes away.
 
 ## Detection
 
@@ -63,3 +70,24 @@ Codex names are resolved by mapping the live Codex process to a thread, then
 reading that thread's `title` from `~/.codex/state_5.sqlite` only when it appears
 user-provided. Generated titles are ignored by requiring `title` to differ from
 `first_user_message`, or for `first_user_message` to be empty.
+
+The generic provider detects an environment variable whose name ends in
+`SESSION_DIR` on the pane process or one of its descendants. It examines JSONL
+files in that directory and reads only:
+
+- `id` and `cwd` from the initial `type: "session"` record
+- the latest non-empty `name` from a `type: "session_info"` record
+
+An open session-file descriptor is treated as a strong process-to-session match.
+Otherwise, the newest session whose `cwd` contains the pane path is a weak match
+and is debounced. The generic provider requires `jq`.
+
+## Test
+
+```sh
+tests/run.sh
+```
+
+The test uses an isolated tmux server and covers provider metadata, dispatcher
+identity, automatic-name restoration, global application-rename policy, and
+manual override ownership.

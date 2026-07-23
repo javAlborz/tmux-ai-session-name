@@ -85,7 +85,35 @@ rows="$(descendant_rows "$pane_pid")"
 rows_with_root="$(process_table | awk -v pid="$pane_pid" '$1 == pid { print }'; printf '%s\n' "$rows")"
 
 tool=""
-if printf '%s\n' "$rows_with_root" | grep -Eiq '(^|[ /.-])claude([ /.-]|$)|claude-code|@anthropic-ai/claude-code'; then
+identity=""
+confidence=""
+
+# Prefer the product-neutral JSONL provider when a descendant advertises a
+# session directory. It reads only the stable session id, cwd, and the latest
+# explicit display name; conversation records are never inspected.
+session_dir_result="$(
+  AI_SESSION_NAME_REPORT_TOOL_ONLY="$report_tool_only" \
+  AI_SESSION_NAME_REPORT_ID="$report_id" \
+    "$script_dir/session-dir-session-name.sh" \
+      "$pane_pid" "$pane_cwd" "$pane_title" "$rows_with_root" 2>/dev/null || true
+)"
+if [ "$report_tool_only" = "1" ] && [ "$session_dir_result" = "1" ]; then
+  printf 'task\t\n'
+  exit 2
+elif [ -n "$session_dir_result" ]; then
+  tool="task"
+  if [ "$report_id" = "1" ] && printf '%s' "$session_dir_result" | grep -q "$(printf '\t')"; then
+    identity="${session_dir_result%%	*}"
+    rest="${session_dir_result#*	}"
+    session="${rest%%	*}"
+    confidence="${rest#*	}"
+    if [ "$confidence" = "$rest" ]; then
+      confidence=""
+    fi
+  else
+    session="$session_dir_result"
+  fi
+elif printf '%s\n' "$rows_with_root" | grep -Eiq '(^|[ /.-])claude([ /.-]|$)|claude-code|@anthropic-ai/claude-code'; then
   tool="claude"
 elif printf '%s\n' "$rows_with_root" | grep -Eiq '(^|[ /.-])codex([ /.-]|$)|@openai/codex'; then
   tool="codex"
@@ -94,9 +122,10 @@ else
 fi
 
 case "$tool" in
+  task)
+    ;;
   claude)
     session="$("$script_dir/claude-session-name.sh" "$pane_pid" "$pane_cwd" "$pane_title" "$rows_with_root" || true)"
-    identity=""
     ;;
   codex)
     session_result="$(AI_SESSION_NAME_REPORT_ID="$report_id" "$script_dir/codex-session-name.sh" "$pane_pid" "$pane_cwd" "$pane_title" "$rows_with_root" || true)"
@@ -109,9 +138,7 @@ case "$tool" in
         confidence=""
       fi
     else
-      identity=""
       session="$session_result"
-      confidence=""
     fi
     ;;
 esac
