@@ -37,7 +37,7 @@ fi
 echo "$$" >"$pid_file"
 trap 'rm -f "$pid_file" "$lock_file"' EXIT INT TERM
 
-while tmux info >/dev/null 2>&1; do
+while tmux list-sessions >/dev/null 2>&1; do
   enabled="$(tmux_option "@ai-session-name-enabled" "on")"
   if [ "$enabled" = "on" ]; then
     "$rename_script" >/dev/null 2>&1 || true
@@ -50,4 +50,3 @@ while tmux info >/dev/null 2>&1; do
   [ "$interval" -lt 1 ] && interval=1
   sleep "$interval"
 done
-
