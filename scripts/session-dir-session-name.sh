@@ -3,7 +3,7 @@ set -u
 
 pane_pid="${1:-}"
 pane_cwd="${2:-}"
-_pane_title="${3:-}"
+pane_title="${3:-}"
 rows="${4:-}"
 report_tool_only="${AI_SESSION_NAME_REPORT_TOOL_ONLY:-}"
 report_id="${AI_SESSION_NAME_REPORT_ID:-}"
@@ -37,6 +37,49 @@ $process_pids
 EOF_PIDS
 )"
 session_sources="$(printf '%s\n' "$session_sources" | awk -F'\t' 'NF >= 2 && !seen[$0]++')"
+
+# Stock Pi uses ~/.pi/agent/sessions/<encoded-cwd> without exporting a
+# *_SESSION_DIR variable. Detect that layout only for an actual Pi process in
+# this pane's process tree; other clients must continue advertising their
+# session directory explicitly.
+if [ -z "$session_sources" ] && printf '%s\n' "$rows" | awk '$3 == "pi" { found = 1 } END { exit !found }'; then
+  pi_agent_dir=""
+  process_home=""
+  while read -r pid; do
+    [ -r "$proc_root/$pid/environ" ] || continue
+    if [ -z "$pi_agent_dir" ]; then
+      pi_agent_dir="$(
+        tr '\0' '\n' <"$proc_root/$pid/environ" 2>/dev/null |
+          sed -n 's/^PI_CODING_AGENT_DIR=//p' |
+          head -n 1
+      )"
+    fi
+    if [ -z "$process_home" ]; then
+      process_home="$(
+        tr '\0' '\n' <"$proc_root/$pid/environ" 2>/dev/null |
+          sed -n 's/^HOME=//p' |
+          head -n 1
+      )"
+    fi
+  done <<EOF_PIDS
+$process_pids
+EOF_PIDS
+
+  if [ -z "$pi_agent_dir" ] && [ -n "$process_home" ]; then
+    pi_agent_dir="$process_home/.pi/agent"
+  fi
+  if [ -n "$pi_agent_dir" ]; then
+    safe_cwd="${pane_cwd#/}"
+    safe_cwd="${safe_cwd#\\}"
+    safe_cwd="${safe_cwd//\//-}"
+    safe_cwd="${safe_cwd//\\/-}"
+    safe_cwd="${safe_cwd//:/-}"
+    pi_session_dir="$pi_agent_dir/sessions/--${safe_cwd}--"
+    if [ -d "$pi_session_dir" ]; then
+      session_sources="$(printf '%s\t%s\n' "$pane_pid" "$pi_session_dir")"
+    fi
+  fi
+fi
 [ -n "$session_sources" ] || exit 1
 
 clean_field() {
@@ -91,6 +134,17 @@ emit_result() {
   fi
 }
 
+title_matches_name() {
+  local name="$1"
+
+  [ -n "$pane_title" ] || return 1
+  [ -n "$name" ] || return 1
+  case "$pane_title" in
+    "$name"|*" - $name - "*) return 0 ;;
+  esac
+  return 1
+}
+
 # Prefer a session file held open by the process. This gives an authoritative
 # identity even when several sessions share the same working directory.
 while IFS=$'\t' read -r pid session_dir; do
@@ -118,9 +172,9 @@ done <<EOF_SOURCES
 $session_sources
 EOF_SOURCES
 
-# Most clients open JSONL only while appending. Fall back to the newest matching
-# session. Treat it as weak so the core debounce and duplicate-identity checks
-# can reject transient or cross-window ambiguity.
+# Most clients open JSONL only while appending. Match explicit metadata against
+# the pane-local title instead of choosing the newest file by cwd: several
+# sessions can share both a cwd and a session directory.
 candidates="$(
   while IFS=$'\t' read -r _pid session_dir; do
     find "$session_dir" -maxdepth 1 -type f -name '*.jsonl' -printf '%T@\t%p\n' 2>/dev/null
@@ -130,6 +184,7 @@ EOF_SOURCES
 )"
 candidates="$(printf '%s\n' "$candidates" | sort -t $'\t' -k1,1nr | awk -F'\t' '!seen[$2]++')"
 
+matched_name=""
 while IFS=$'\t' read -r _mtime file; do
   [ -n "$file" ] || continue
   metadata="$(session_metadata "$file" || true)"
@@ -139,19 +194,19 @@ while IFS=$'\t' read -r _mtime file; do
   session_cwd="${rest%%	*}"
   name="${rest#*	}"
   cwd_matches "$session_cwd" || continue
-
-  confidence="weak"
-  if printf '%s\n' "$rows" | grep -Fq "$file" || printf '%s\n' "$rows" | grep -Fq "$identity"; then
-    confidence="strong"
+  title_matches_name "$name" || continue
+  if [ -n "$matched_name" ] && [ "$matched_name" != "$name" ]; then
+    exit 1
   fi
-  emit_result "$identity" "$name" "$confidence" && exit 0
-  # The newest cwd match is the active-session candidate. If it has no
-  # explicit name, report no name instead of borrowing one from history.
-  exit 1
+  matched_name="$name"
 done <<EOF_CANDIDATES
 $candidates
 EOF_CANDIDATES
 
+if [ -n "$matched_name" ]; then
+  emit_result "pane:$pane_pid" "$matched_name" "strong"
+  exit $?
+fi
 if [ "$report_tool_only" = "1" ]; then
   printf '1\n'
   exit 0

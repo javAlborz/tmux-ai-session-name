@@ -84,6 +84,47 @@ unnamed_result="$(
 )"
 assert_eq "" "$unnamed_result" "new unnamed session does not borrow an older name"
 
+title_pid=4444
+other_name="Different session"
+other_file="$fixture_sessions/newer-named.jsonl"
+{
+  jq -nc --arg id "6fd2c204-c456-4747-b160-e66bf32892eb" --arg cwd "$fixture_cwd" \
+    '{type:"session",version:3,id:$id,timestamp:"2026-07-24T00:02:00Z",cwd:$cwd}'
+  jq -nc --arg name "$other_name" \
+    '{type:"session_info",id:"other-name",parentId:null,timestamp:"2026-07-24T00:02:01Z",name:$name}'
+} >"$other_file"
+touch -d '2026-07-24T00:02:00Z' "$other_file"
+mkdir -p "$fixture_proc/$title_pid/fd"
+printf 'TASK_SESSION_DIR=%s\0' "$fixture_sessions" >"$fixture_proc/$title_pid/environ"
+title_result="$(
+  AI_SESSION_NAME_PROC_ROOT="$fixture_proc" AI_SESSION_NAME_REPORT_ID=1 \
+    "$provider" "$title_pid" "$fixture_cwd" "π - $fixture_name - work" "$title_pid 1 task task"
+)"
+assert_eq "$(printf 'pane:%s\t%s\tstrong' "$title_pid" "$fixture_name")" "$title_result" \
+  "pane title selects the correct session among a shared cwd"
+
+pi_pid=4545
+pi_home="$tmp_dir/pi-home"
+safe_cwd="${fixture_cwd#/}"
+safe_cwd="${safe_cwd//\//-}"
+pi_sessions="$pi_home/.pi/agent/sessions/--${safe_cwd}--"
+pi_name="Hermes session"
+pi_file="$pi_sessions/pi.jsonl"
+mkdir -p "$fixture_proc/$pi_pid/fd" "$pi_sessions"
+printf 'HOME=%s\0' "$pi_home" >"$fixture_proc/$pi_pid/environ"
+{
+  jq -nc --arg id "110f4024-27a9-447f-881e-8e12ff784f15" --arg cwd "$fixture_cwd" \
+    '{type:"session",version:3,id:$id,timestamp:"2026-07-24T00:00:00Z",cwd:$cwd}'
+  jq -nc --arg name "$pi_name" \
+    '{type:"session_info",id:"pi-name",parentId:null,timestamp:"2026-07-24T00:00:01Z",name:$name}'
+} >"$pi_file"
+pi_result="$(
+  AI_SESSION_NAME_PROC_ROOT="$fixture_proc" AI_SESSION_NAME_REPORT_ID=1 \
+    "$provider" "$pi_pid" "$fixture_cwd" "π - $pi_name - work" "$pi_pid 1 pi pi"
+)"
+assert_eq "$(printf 'pane:%s\t%s\tstrong' "$pi_pid" "$pi_name")" "$pi_result" \
+  "stock Pi default session directory is discovered"
+
 process_table="$tmp_dir/process-table"
 printf '%s\n' "$fixture_pid 1 task task" >"$process_table"
 detector_result="$(
@@ -134,7 +175,10 @@ mkdir -p "$live_sessions"
 start_live_task() {
   tmux send-keys -t "$session_name:" "env TASK_SESSION_DIR='$live_sessions' sleep 30" Enter
   for _attempt in 1 2 3 4 5; do
-    [ "$(tmux display-message -pt "$session_name:" '#{pane_current_command}')" = "sleep" ] && return 0
+    if [ "$(tmux display-message -pt "$session_name:" '#{pane_current_command}')" = "sleep" ]; then
+      tmux select-pane -t "$session_name:" -T "π - $live_name - work"
+      return 0
+    fi
     sleep 0.1
   done
   fail "test task did not start"

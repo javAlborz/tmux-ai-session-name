@@ -72,15 +72,19 @@ user-provided. Generated titles are ignored by requiring `title` to differ from
 `first_user_message`, or for `first_user_message` to be empty.
 
 The generic provider detects an environment variable whose name ends in
-`SESSION_DIR` on the pane process or one of its descendants. It examines JSONL
-files in that directory and reads only:
+`SESSION_DIR` on the pane process or one of its descendants. Stock Pi is also
+supported through its default `~/.pi/agent/sessions/<encoded-cwd>` layout when
+no session-directory variable is exported. The provider examines JSONL files
+in the resolved directory and reads only:
 
 - `id` and `cwd` from the initial `type: "session"` record
 - the latest non-empty `name` from a `type: "session_info"` record
 
-An open session-file descriptor is treated as a strong process-to-session match.
-Otherwise, the newest session whose `cwd` contains the pane path is a weak match
-and is debounced. The generic provider requires `jq`.
+An open session-file descriptor is treated as a strong process-to-session
+match. Otherwise, an explicit session name must match the pane-local terminal
+title. The provider never guesses from the newest file by working directory,
+because several live sessions commonly share both the directory and session
+store. The generic provider requires `jq`.
 
 ## Test
 
