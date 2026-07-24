@@ -15,20 +15,40 @@ get_tmux_option() {
   fi
 }
 
-enabled="$(get_tmux_option "@ai-session-name-enabled" "on")"
-if [ "$enabled" != "on" ]; then
-  exit 0
-fi
-
 tmux set-environment -g AI_SESSION_NAME_PLUGIN_DIR "$CURRENT_DIR"
-setsid -f bash "$CURRENT_DIR/scripts/rename-daemon.sh" </dev/null >/dev/null 2>&1
 
 # Self-heal: re-spawn the daemon on common tmux events. Launching via setsid
 # detaches the daemon from tmux's process tree, so tmux won't print a
 # "terminated by signal N" status when the daemon eventually exits. The
 # daemon's own flock+pid guard makes repeated invocations a fast no-op.
 spawn_cmd="run-shell -b 'setsid -f bash \"$CURRENT_DIR/scripts/rename-daemon.sh\" </dev/null >/dev/null 2>&1'"
+
+# Older releases appended an unindexed hook on every config reload. Remove only
+# entries owned by this plugin, retain other integrations, and reserve one
+# stable index so sourcing the plugin is idempotent.
+hook_index=92
 for hook in client-attached session-created after-new-window; do
-  tmux set-hook -ga "$hook" "$spawn_cmd"
+  while IFS= read -r hook_line; do
+    hook_entry="${hook_line%% *}"
+    case "$hook_line" in
+      *"$CURRENT_DIR/scripts/rename-daemon.sh"*)
+        if [ "$hook_entry" != "${hook}[$hook_index]" ]; then
+          tmux set-hook -gu "$hook_entry"
+        fi
+        ;;
+    esac
+  done < <(tmux show-hooks -g "$hook" 2>/dev/null || true)
 done
 
+enabled="$(get_tmux_option "@ai-session-name-enabled" "on")"
+if [ "$enabled" != "on" ]; then
+  for hook in client-attached session-created after-new-window; do
+    tmux set-hook -gu "${hook}[$hook_index]" 2>/dev/null || true
+  done
+  exit 0
+fi
+
+setsid -f bash "$CURRENT_DIR/scripts/rename-daemon.sh" </dev/null >/dev/null 2>&1
+for hook in client-attached session-created after-new-window; do
+  tmux set-hook -g "${hook}[$hook_index]" "$spawn_cmd"
+done

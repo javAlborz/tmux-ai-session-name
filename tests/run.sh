@@ -141,6 +141,14 @@ wrapper_dir="$tmp_dir/bin"
 mkdir -p "$wrapper_dir"
 printf '%s\n' \
   '#!/usr/bin/env bash' \
+  'case "${1:-}" in' \
+  '  set-window-option|rename-window)' \
+  '    if [ -n "${TMUX_AI_TEST_MUTATION_LOG:-}" ]; then' \
+  '      printf "%q " "$@" >>"$TMUX_AI_TEST_MUTATION_LOG"' \
+  '      printf "\n" >>"$TMUX_AI_TEST_MUTATION_LOG"' \
+  '    fi' \
+  '    ;;' \
+  'esac' \
   'exec env -u TMUX "$TMUX_AI_TEST_REAL" -L "$TMUX_AI_TEST_SOCKET" "$@"' \
   >"$wrapper_dir/tmux"
 chmod +x "$wrapper_dir/tmux"
@@ -207,6 +215,15 @@ assert_eq "off" "$(tmux show-window-option -t "$session_name:" -v automatic-rena
 assert_eq "off" "$(tmux show-window-option -g -v allow-rename)" \
   "application-driven rename remains disabled"
 
+mutation_log="$tmp_dir/mutations"
+: >"$mutation_log"
+export TMUX_AI_TEST_MUTATION_LOG="$mutation_log"
+rm -f "$cache_file"
+"$renamer"
+assert_eq "" "$(sed -n '1p' "$mutation_log")" \
+  "stable named task does not rewrite unchanged tmux state"
+unset TMUX_AI_TEST_MUTATION_LOG
+
 stop_live_task
 rm -f "$cache_file"
 "$renamer"
@@ -227,5 +244,16 @@ assert_eq "ops" "$(tmux display-message -pt "$session_name:" '#{window_name}')" 
   "manual rename wins while task is active"
 assert_eq "" "$(tmux show-option -w -t "$session_name:" -qv @ai-session-name-owned)" \
   "manual rename releases plugin ownership"
+
+tmux set-option -g @ai-session-name-enabled on
+bash "$repo_dir/ai-session-name.tmux"
+bash "$repo_dir/ai-session-name.tmux"
+for hook in client-attached session-created after-new-window; do
+  hook_lines="$(tmux show-hooks -g "$hook" | grep -F "$repo_dir/scripts/rename-daemon.sh" || true)"
+  assert_eq "${hook}[92]" "${hook_lines%% *}" \
+    "$hook uses one stable plugin hook"
+  assert_eq "1" "$(printf '%s\n' "$hook_lines" | awk 'NF { count++ } END { print count + 0 }')" \
+    "$hook is not duplicated after reload"
+done
 
 printf 'all tests passed\n'

@@ -61,6 +61,11 @@ naming. When it releases the window, it restores both. A manual `rename-window`
 while the plugin owns a window releases ownership and wins until that detected
 session goes away.
 
+Reloading tmux configuration is safe: the plugin owns one indexed self-heal
+hook per event and removes append-only hook entries left by older releases.
+Its polling loop also skips tmux option writes when the resolved name and
+ownership state have not changed.
+
 ## Detection
 
 Claude Code names are read from `--name`/`-n` arguments or from `/rename`
