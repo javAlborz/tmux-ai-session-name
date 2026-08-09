@@ -40,6 +40,8 @@ while IFS= read -r script; do
 done < <(find "$repo_dir" -maxdepth 2 -type f \( -name '*.sh' -o -name '*.tmux' \) -print)
 printf 'ok - shell syntax\n'
 
+bash "$repo_dir/tests/codex-session-name.sh"
+
 fixture_proc="$tmp_dir/proc"
 fixture_sessions="$tmp_dir/sessions"
 fixture_cwd="$tmp_dir/work"
