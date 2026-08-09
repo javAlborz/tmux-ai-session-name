@@ -55,6 +55,96 @@ thread_id_from_resume_args() {
     head -1
 }
 
+is_uuid() {
+  printf '%s' "$1" | grep -Eq '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+}
+
+resume_aliases_from_args() {
+  printf '%s\n' "$rows" |
+    sed -nE 's#.*(^|[[:space:]/.-])codex([[:space:]/.-]|.*[[:space:]])resume[[:space:]]+([^[:space:]]+)([[:space:]].*)?$#\3#p' |
+    while read -r alias; do
+      [ -n "$alias" ] || continue
+      case "$alias" in -*) continue ;; esac
+      is_uuid "$alias" && continue
+      printf '%s\n' "$alias"
+    done |
+    awk 'NF && !seen[$0]++'
+}
+
+sql_escape() {
+  printf '%s' "$1" | sed "s/'/''/g"
+}
+
+session_index_thread_ids_for_alias() {
+  local alias="$1"
+  local index_file="$codex_home/session_index.jsonl"
+
+  [ -r "$index_file" ] || return 1
+
+  awk -v alias="$alias" '
+    function unescape(value) {
+      gsub(/\\"/, "\"", value)
+      gsub(/\\\\/, "\\", value)
+      return value
+    }
+    {
+      id = ""
+      title = ""
+      updated = ""
+      if (match($0, /"id":"([^"\\]|\\.)*"/)) {
+        id = substr($0, RSTART + 6, RLENGTH - 7)
+        id = unescape(id)
+      }
+      if (match($0, /"thread_name":"([^"\\]|\\.)*"/)) {
+        title = substr($0, RSTART + 15, RLENGTH - 16)
+        title = unescape(title)
+      }
+      if (match($0, /"updated_at":"([^"\\]|\\.)*"/)) {
+        updated = substr($0, RSTART + 14, RLENGTH - 15)
+        updated = unescape(updated)
+      }
+      if (id != "" && title == alias) {
+        if (updated > best_updated || (updated == best_updated && NR > best_nr)) {
+          best_id = id
+          best_updated = updated
+          best_nr = NR
+        }
+      }
+    }
+    END {
+      if (best_id != "") {
+        print best_id
+      }
+    }
+  ' "$index_file" 2>/dev/null
+}
+
+sqlite_thread_ids_for_alias() {
+  local alias="$1"
+  local db="$codex_home/state_5.sqlite"
+  local escaped_alias
+
+  command -v sqlite3 >/dev/null 2>&1 || return 1
+  [ -r "$db" ] || return 1
+
+  escaped_alias="$(sql_escape "$alias")"
+  sqlite3 "$db" "select id from threads where title = '$escaped_alias' and title != '' and (first_user_message = '' or title != first_user_message) order by updated_at desc limit 1;" 2>/dev/null
+}
+
+thread_ids_from_resume_aliases() {
+  local alias
+
+  resume_aliases_from_args |
+  while read -r alias; do
+    [ -n "$alias" ] || continue
+    {
+      session_index_thread_ids_for_alias "$alias" || true
+      sqlite_thread_ids_for_alias "$alias" || true
+    } | awk 'NF && !seen[$0]++'
+  done |
+  awk 'NF && !seen[$0]++'
+}
+
 thread_id_from_process_logs() {
   local logs_db="$codex_home/logs_2.sqlite"
   local state_db="$codex_home/state_5.sqlite"
@@ -101,6 +191,7 @@ thread_id_from_process_logs() {
 
 candidate_thread_refs() {
   local authoritative
+  local alias_refs
 
   authoritative="$({
     thread_id_from_env || true
@@ -110,6 +201,12 @@ candidate_thread_refs() {
 
   if [ -n "$authoritative" ]; then
     printf '%s\n' "$authoritative" | awk 'NF { print "strong\t" $0 }'
+    return 0
+  fi
+
+  alias_refs="$(thread_ids_from_resume_aliases || true)"
+  if [ -n "$alias_refs" ]; then
+    printf '%s\n' "$alias_refs" | awk 'NF { print "strong\t" $0 }'
     return 0
   fi
 
@@ -123,7 +220,7 @@ sqlite_user_title_for_thread() {
   command -v sqlite3 >/dev/null 2>&1 || return 1
   [ -r "$db" ] || return 1
 
-  sqlite3 "$db" "select nullif(title,'') from threads where id = '$thread_id' and title != '' and (first_user_message = '' or title != first_user_message) limit 1;" 2>/dev/null |
+  sqlite3 "$db" "select nullif(title,'') from threads where id = '$(sql_escape "$thread_id")' and title != '' and (first_user_message = '' or title != first_user_message) limit 1;" 2>/dev/null |
     head -1
 }
 
@@ -134,7 +231,7 @@ sqlite_first_user_message_for_thread() {
   command -v sqlite3 >/dev/null 2>&1 || return 1
   [ -r "$db" ] || return 1
 
-  sqlite3 "$db" "select first_user_message from threads where id = '$thread_id' limit 1;" 2>/dev/null |
+  sqlite3 "$db" "select first_user_message from threads where id = '$(sql_escape "$thread_id")' limit 1;" 2>/dev/null |
     head -1
 }
 

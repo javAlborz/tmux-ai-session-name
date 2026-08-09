@@ -76,6 +76,12 @@ reading that thread's `title` from `~/.codex/state_5.sqlite` only when it appear
 user-provided. Generated titles are ignored by requiring `title` to differ from
 `first_user_message`, or for `first_user_message` to be empty.
 
+Codex thread identity is resolved in priority order: explicit environment or
+resume UUID, shell snapshot UUID, `codex resume <name>` alias, then weak process
+log history. The alias path uses the newest matching Codex session index/state
+entry. It is intentionally lower priority than a UUID so an active fork cannot
+inherit an older name from stale logs.
+
 The generic provider detects an environment variable whose name ends in
 `SESSION_DIR` on the pane process or one of its descendants. Stock Pi is also
 supported through its default `~/.pi/agent/sessions/<encoded-cwd>` layout when
