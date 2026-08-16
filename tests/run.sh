@@ -9,6 +9,11 @@ tmp_dir="$(mktemp -d)"
 socket_name="tmux-ai-session-name-test-$$"
 real_tmux="$(command -v tmux)"
 
+# Keep the daemon's pid/lock files inside tmp_dir. They are keyed by tmux server
+# pid, so an ephemeral test server otherwise leaves a pair behind in
+# XDG_RUNTIME_DIR on every run, which no later run ever reclaims.
+export AI_SESSION_NAME_RUNTIME_DIR="$tmp_dir"
+
 cleanup() {
   env -u TMUX "$real_tmux" -L "$socket_name" kill-server >/dev/null 2>&1 || true
   rm -rf "$tmp_dir"
@@ -41,6 +46,7 @@ done < <(find "$repo_dir" -maxdepth 2 -type f \( -name '*.sh' -o -name '*.tmux' 
 printf 'ok - shell syntax\n'
 
 bash "$repo_dir/tests/codex-session-name.sh"
+bash "$repo_dir/tests/claude-session-name.sh"
 
 fixture_proc="$tmp_dir/proc"
 fixture_sessions="$tmp_dir/sessions"
