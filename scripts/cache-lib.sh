@@ -96,9 +96,17 @@ cache_store() {
   now="$(cache_now_s)"
   tmp="$(mktemp "${cache_file}.XXXXXX" 2>/dev/null)" || return 0
 
+  # Drop rows that no TTL can revive along with the row being replaced. Keys
+  # carry a pid, so a pid that exits (or a key whose shape changed) leaves rows
+  # nothing will ever look up again; with the file at its line cap and stores
+  # replacing in place, those rows would otherwise squat forever and crowd out
+  # live entries. The bound sits far above every TTL in use, so a row is only
+  # ever dropped here once it is long dead. Revisit if cache_lookup_permanent
+  # gains a caller: it is the one reader that expects rows never to expire.
   {
     if [ -r "$cache_file" ]; then
-      awk -F'\t' -v k="$key" '$1 != k' "$cache_file" 2>/dev/null || true
+      awk -F'\t' -v k="$key" -v now="$now" -v max_age=3600 \
+        '$1 != k && ($2 + 0) > 0 && (now - ($2 + 0)) < max_age' "$cache_file" 2>/dev/null || true
     fi
     printf '%s\t%s\t%s\n' "$key" "$now" "$value"
   } | tail -n 500 > "$tmp" 2>/dev/null
