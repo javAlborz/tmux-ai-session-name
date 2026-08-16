@@ -7,6 +7,14 @@ pane_title="${3:-}"
 rows="${4:-}"
 claude_home="${CLAUDE_HOME:-$HOME/.claude}"
 
+# Upper bound on transcripts scanned per lookup, newest first. A busy project
+# directory accumulates them (one per session), so this has to sit well above
+# the number of sessions that realistically share one working directory.
+max_transcripts="${AI_SESSION_NAME_MAX_TRANSCRIPTS:-50}"
+case "$max_transcripts" in
+  ''|*[!0-9]*|0) max_transcripts=50 ;;
+esac
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -r "$script_dir/cache-lib.sh" ]; then
   # shellcheck disable=SC1091
@@ -62,56 +70,37 @@ claude_process_start_ms() {
 
 pane_title_has_rename_record() {
   local title="$1"
-  local start_ms="$2"
   local project_dir
-  local escaped_title
-  local newest_files
-  local lower_sec
-  local upper_sec
-  local line
-  local timestamp
-  local timestamp_sec
-  local matches
+  local candidate_files
+  local needle
+  local match
 
   [ -n "$title" ] || return 1
-  [ -n "$start_ms" ] || return 1
-  command -v date >/dev/null 2>&1 || return 1
   project_dir="$(project_dir_for_cwd "$pane_cwd")"
   [ -d "$project_dir" ] || return 1
-  lower_sec=$((start_ms / 1000 - 60))
-  upper_sec=$(($(date -u +%s) + 300))
 
-  newest_files="$(find "$project_dir" -maxdepth 1 -type f -name '*.jsonl' -printf '%T@ %p\n' 2>/dev/null |
-    awk -v low="$lower_sec" '$1 >= low { print }' |
+  # Newest transcripts first, so a live session matches on the first file read.
+  # The whole project directory is in scope and no lower time bound applies: a
+  # session named in an earlier run (--resume, --continue, a restored tmux
+  # server) keeps its rename record at the timestamp of that earlier run, in a
+  # transcript that busier neighbours can push well down the mtime order. Both
+  # bounds silently discarded those names even though the pane title was right.
+  candidate_files="$(find "$project_dir" -maxdepth 1 -type f -name '*.jsonl' -printf '%T@ %p\n' 2>/dev/null |
     sort -rn |
-    head -10 |
+    head -n "$max_transcripts" |
     cut -d' ' -f2-)"
-  [ -n "$newest_files" ] || return 1
+  [ -n "$candidate_files" ] || return 1
 
-  escaped_title="$(printf '%s\n' "$title" | sed 's/[.[\*^$()+?{|\\]/\\&/g')"
-  while read -r file; do
-    [ -r "$file" ] || continue
-    matches="$(grep -Eh "<local-command-stdout>Session renamed to: ${escaped_title}</local-command-stdout>" "$file" 2>/dev/null || true)"
-    [ -n "$matches" ] || continue
+  # The record is a fixed string, so match it literally: -l stops reading each
+  # file at its first hit and head closes the pipe once any file matches.
+  needle="<local-command-stdout>Session renamed to: ${title}</local-command-stdout>"
+  match="$(printf '%s\n' "$candidate_files" |
+    tr '\n' '\0' |
+    xargs -0 -r grep -lF -e "$needle" 2>/dev/null |
+    head -n 1)"
+  [ -n "$match" ] || return 1
 
-    while IFS= read -r line; do
-      timestamp="$(printf '%s\n' "$line" | sed -nE 's/.*"timestamp":"([^"]+)".*/\1/p')"
-      [ -n "$timestamp" ] || continue
-      timestamp_sec="$(date -u -d "$timestamp" +%s 2>/dev/null || true)"
-      [ -n "$timestamp_sec" ] || continue
-      [ "$timestamp_sec" -ge "$lower_sec" ] || continue
-      [ "$timestamp_sec" -le "$upper_sec" ] || continue
-
-      printf '%s\n' "$title"
-      return 0
-    done <<EOF_MATCHES
-$matches
-EOF_MATCHES
-  done <<EOF
-$newest_files
-EOF
-
-  return 1
+  printf '%s\n' "$title"
 }
 
 start_ms="$(claude_process_start_ms || true)"
@@ -120,27 +109,27 @@ case "$title" in
   ""|bash|zsh|fish|claude|"Claude Code")
     ;;
   *)
-    if [ -n "$start_ms" ]; then
-      cache_key="claude|${pane_pid}|${start_ms}|${title}"
-      if command -v cache_lookup >/dev/null 2>&1; then
-        cached_value="$(cache_lookup "$cache_key" 30)"
-        cache_rc=$?
-        if [ "$cache_rc" -eq 0 ]; then
-          printf '%s\n' "$cached_value"
-          exit 0
-        elif [ "$cache_rc" -eq 2 ]; then
-          exit 1
-        fi
-      fi
-
-      verified="$(pane_title_has_rename_record "$title" "$start_ms" || true)"
-      if command -v cache_store >/dev/null 2>&1; then
-        cache_store "$cache_key" "$verified"
-      fi
-      if [ -n "$verified" ]; then
-        printf '%s\n' "$verified"
+    # start_ms only scopes the cache entry to this process incarnation; it is no
+    # longer a precondition for resolving a name.
+    cache_key="claude|${pane_pid}|${start_ms}|${title}"
+    if command -v cache_lookup >/dev/null 2>&1; then
+      cached_value="$(cache_lookup "$cache_key" 30)"
+      cache_rc=$?
+      if [ "$cache_rc" -eq 0 ]; then
+        printf '%s\n' "$cached_value"
         exit 0
+      elif [ "$cache_rc" -eq 2 ]; then
+        exit 1
       fi
+    fi
+
+    verified="$(pane_title_has_rename_record "$title" || true)"
+    if command -v cache_store >/dev/null 2>&1; then
+      cache_store "$cache_key" "$verified"
+    fi
+    if [ -n "$verified" ]; then
+      printf '%s\n' "$verified"
+      exit 0
     fi
     ;;
 esac
