@@ -82,6 +82,24 @@ log history. The alias path uses the newest matching Codex session index/state
 entry. It is intentionally lower priority than a UUID so an active fork cannot
 inherit an older name from stale logs.
 
+A resume UUID also contributes the threads that share its `process_uuid`, since
+Codex forks a new thread id inside the same running process on compaction and on
+new turns, leaving the launch-time UUID behind. Those successors are restricted
+to the pane's own Codex pids: a thread outlives the run that created it, so an
+unrelated older session may hold log rows against the same anchor, and without
+that restriction its name is reachable from this pane. They are reported as weak
+so the debounce applies.
+
+Claude Code windows deliberately carry no identity, so `@ai-session-name-thread-id`
+stays unset for them. Claude exposes no stable per-session id to the pane: the
+`claude` process environment has none, it does not hold its transcript open, and
+`CLAUDE_CODE_SESSION_ID` exists only inside the transient subprocesses it spawns
+for tool calls — an idle pane has no descendant at all. An identity read from
+there would appear and vanish between passes and churn the window state, and the
+transcript that holds the rename record is not a substitute: two sessions sharing
+a name match the same file, which would look like one window stealing another's
+identity. Name resolution does not need an identity, so none is reported.
+
 The generic provider detects an environment variable whose name ends in
 `SESSION_DIR` on the pane process or one of its descendants. Stock Pi is also
 supported through its default `~/.pi/agent/sessions/<encoded-cwd>` layout when
