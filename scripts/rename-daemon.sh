@@ -39,6 +39,43 @@ elif [ -r "$pid_file" ]; then
   fi
 fi
 
+# Every file here is named after the tmux server it belongs to, and the per-pass
+# process table adds the pass pid too. A server that exits without its daemon
+# running the cleanup below -- killed, or gone with the machine -- leaves its set
+# behind, and nothing ever reclaimed them: ~150 had accumulated over a few days
+# of short-lived servers. Reap once at startup, which is often enough and costs
+# nothing during the loop.
+reap_dead_runtime_files() {
+  local f base rest owner pass
+
+  for f in "$runtime_dir"/tmux-ai-session-name.*; do
+    [ -e "$f" ] || continue
+    base="${f##*/}"
+    rest="${base#tmux-ai-session-name.}"
+    owner="${rest%%.*}"
+    case "$owner" in ''|*[!0-9]*) continue ;; esac
+    [ "$owner" = "$server_pid" ] || { kill -0 "$owner" 2>/dev/null && continue; }
+
+    # A .proc snapshot belongs to one pass of one server; it is stale as soon as
+    # either is gone, so a live server's abandoned snapshots are reclaimed too.
+    case "$base" in
+      *.proc)
+        pass="${rest#*.}"
+        pass="${pass%%.*}"
+        case "$pass" in
+          ''|*[!0-9]*) ;;
+          *) kill -0 "$pass" 2>/dev/null && continue ;;
+        esac
+        ;;
+      *)
+        [ "$owner" = "$server_pid" ] && continue
+        ;;
+    esac
+    rm -f "$f" 2>/dev/null || true
+  done
+}
+reap_dead_runtime_files
+
 echo "$$" >"$pid_file"
 cleanup() {
   local recorded_pid
