@@ -349,9 +349,22 @@ release_unresolved_plugin_owned_window() {
   fi
 }
 
+# Grouped sessions share their windows, so `list-panes -a` reports the same
+# window once per session it appears in. Each row carries the window name as it
+# was when the snapshot was taken, so processing a window twice in one pass is
+# not merely wasteful: the first row renames the window, and the second then
+# compares the stale snapshot name against the name just written and concludes
+# the window was renamed by hand -- releasing ownership and setting the manual
+# override lock, which makes the plugin ignore that window from then on.
+seen_windows=" "
+
 tmux list-panes -a -F '#{session_id}	#{window_id}	#{pane_id}	#{pane_active}	#{pane_pid}	#{pane_current_path}	#{pane_title}	#{window_name}' |
 while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_cwd pane_title window_name; do
   [ "$pane_active" = "1" ] || continue
+  case "$seen_windows" in
+    *" $window_id "*) continue ;;
+  esac
+  seen_windows="$seen_windows$window_id "
   owned="$(window_option "$window_id" "$owned_option")"
   existing_identity="$(window_option "$window_id" "$thread_id_option")"
   if [ "$owned" = "1" ] && [ -n "$existing_identity" ] && identity_owned_by_other_window "$window_id" "$existing_identity"; then

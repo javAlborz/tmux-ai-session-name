@@ -253,6 +253,30 @@ assert_eq "ops" "$(tmux display-message -pt "$session_name:" '#{window_name}')" 
 assert_eq "" "$(tmux show-option -w -t "$session_name:" -qv @ai-session-name-owned)" \
   "manual rename releases plugin ownership"
 
+# A window shared by grouped sessions is reported by `list-panes -a` once per
+# session, each row carrying the window name from snapshot time. Claiming it on
+# the first row and then re-reading the stale name on the second looked like a
+# manual rename, so the window was released and locked out for good -- which hit
+# every window created while a grouped session was attached.
+stop_live_task
+tmux rename-window -t "$session_name:" "bash"
+tmux set-window-option -t "$session_name:" -u @ai-session-name-manual-identity
+tmux new-session -d -s "${session_name}-grouped" -t "$session_name"
+assert_eq "2" "$(tmux list-panes -a -F '#{window_id}' | grep -c .)" \
+  "grouped session reports the shared window twice"
+
+start_live_task
+rm -f "$cache_file"
+"$renamer"
+assert_eq "$live_name" "$(tmux display-message -pt "$session_name:" '#{window_name}')" \
+  "grouped session does not stop a window being claimed"
+assert_eq "1" "$(tmux show-option -w -t "$session_name:" -qv @ai-session-name-owned)" \
+  "grouped session does not release ownership"
+assert_eq "" "$(tmux show-option -w -t "$session_name:" -qv @ai-session-name-manual-identity)" \
+  "grouped session does not trip the manual override lock"
+tmux kill-session -t "${session_name}-grouped"
+stop_live_task
+
 tmux set-option -g @ai-session-name-enabled on
 bash "$repo_dir/ai-session-name.tmux"
 bash "$repo_dir/ai-session-name.tmux"
