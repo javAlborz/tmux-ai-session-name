@@ -52,3 +52,17 @@ setsid -f bash "$CURRENT_DIR/scripts/rename-daemon.sh" </dev/null >/dev/null 2>&
 for hook in client-attached session-created after-new-window; do
   tmux set-hook -g "${hook}[$hook_index]" "$spawn_cmd"
 done
+
+# Optional key that branches the agent session in the current window into a new
+# window. It lives here because it consumes this plugin's own record of which
+# session is in which window (@ai-session-name-thread-id): an agent session name
+# is not a usable anchor, since Codex mints a new thread id every turn and
+# carries the name onto each one.
+#
+# Unset by default. A plugin that otherwise only observes should not claim a key
+# or spawn processes without being asked, so the binding is opt-in:
+#   set -g @ai-session-name-fork-key B
+fork_key="$(get_tmux_option "@ai-session-name-fork-key" "")"
+if [ -n "$fork_key" ]; then
+  tmux bind-key "$fork_key" run-shell "'$CURRENT_DIR/scripts/agent-fork.sh' '#{window_id}'"
+fi

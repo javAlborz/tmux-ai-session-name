@@ -47,6 +47,7 @@ printf 'ok - shell syntax\n'
 
 bash "$repo_dir/tests/codex-session-name.sh"
 bash "$repo_dir/tests/claude-session-name.sh"
+bash "$repo_dir/tests/agent-fork.sh"
 
 fixture_proc="$tmp_dir/proc"
 fixture_sessions="$tmp_dir/sessions"
@@ -277,7 +278,19 @@ assert_eq "" "$(tmux show-option -w -t "$session_name:" -qv @ai-session-name-man
 tmux kill-session -t "${session_name}-grouped"
 stop_live_task
 
+# The fork key is opt-in: a plugin that otherwise only observes must not claim a
+# key or spawn processes unless asked for.
 tmux set-option -g @ai-session-name-enabled on
+tmux set-option -gu @ai-session-name-fork-key
+bash "$repo_dir/ai-session-name.tmux"
+assert_eq "0" "$(tmux list-keys -T prefix | grep -cE '^bind-key\s+-T prefix\s+B ' || true)" \
+  "fork key is not bound unless asked for"
+tmux set-option -g @ai-session-name-fork-key B
+bash "$repo_dir/ai-session-name.tmux"
+assert_eq "1" "$(tmux list-keys -T prefix | grep -cE '^bind-key\s+-T prefix\s+B ' || true)" \
+  "fork key is bound when configured"
+tmux set-option -gu @ai-session-name-fork-key
+
 bash "$repo_dir/ai-session-name.tmux"
 bash "$repo_dir/ai-session-name.tmux"
 for hook in client-attached session-created after-new-window; do
