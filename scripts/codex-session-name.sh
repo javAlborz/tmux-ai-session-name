@@ -16,8 +16,37 @@ if [ -r "$script_dir/cache-lib.sh" ]; then
 fi
 
 state_db_mtime="$(stat -c %Y "$codex_home/state_5.sqlite" 2>/dev/null || printf '0\n')"
-logs_db_mtime="$(stat -c %Y "$codex_home/logs_2.sqlite" 2>/dev/null || printf '0\n')"
 session_index_mtime="$(stat -c %Y "$codex_home/session_index.jsonl" 2>/dev/null || printf '0\n')"
+
+# Correlating a process through logs_2.sqlite requires queries that are not
+# covered by Codex's normal indexes. On a long-lived host that database can be
+# hundreds of megabytes, and polling it from every tmux pane caused sustained
+# disk reads and uninterruptible sqlite processes. Keep that compatibility
+# fallback opt-in and size-bounded. Normal resolution still uses the process
+# environment, resume arguments, shell snapshots, session index, and state DB.
+logs_db_queries_enabled="${AI_SESSION_NAME_ENABLE_LOG_DB:-0}"
+logs_db_max_bytes="${AI_SESSION_NAME_LOG_DB_MAX_BYTES:-134217728}"
+
+can_query_logs_db() {
+  local logs_db="$codex_home/logs_2.sqlite"
+  local size
+
+  [ "$logs_db_queries_enabled" = "1" ] || return 1
+  case "$logs_db_max_bytes" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ -f "$logs_db" ] || return 1
+  size="$(stat -c %s "$logs_db" 2>/dev/null || true)"
+  case "$size" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "$size" -le "$logs_db_max_bytes" ]
+}
+
+logs_db_mtime=0
+if can_query_logs_db; then
+  logs_db_mtime="$(stat -c %Y "$codex_home/logs_2.sqlite" 2>/dev/null || printf '0\n')"
+fi
 
 # These files are shared by every codex session on the machine, so any codex
 # activity anywhere changes all three mtimes. Carrying them in the cache KEY
@@ -159,6 +188,7 @@ thread_id_from_process_logs() {
   local state_db="$codex_home/state_5.sqlite"
   local pid
 
+  can_query_logs_db || return 1
   command -v sqlite3 >/dev/null 2>&1 || return 1
   [ -r "$logs_db" ] || return 1
   [ -r "$state_db" ] || return 1
@@ -216,6 +246,7 @@ successor_thread_ids() {
   local id
   local pid
 
+  can_query_logs_db || return 1
   command -v sqlite3 >/dev/null 2>&1 || return 1
   [ -r "$logs_db" ] || return 1
   [ -n "$anchor_ids" ] || return 1
@@ -259,9 +290,79 @@ EOF_PIDS
     order by max(l.ts) desc, max(l.ts_nanos) desc;" 2>/dev/null
 }
 
+# Threads this pane's codex process plausibly opened, for a session that was
+# started with no argument at all.
+#
+# Every other path needs a handle the launch command gave us: a thread id in the
+# environment (codex does not set one), a uuid or alias after `resume`, a shell
+# snapshot path (present only while a tool is running), or the process log
+# database (opt-in, and refused once it outgrows its size cap -- it reached
+# 795 MB against a 128 MB cap on the host this was written for). A plain `codex`
+# offers none of them, so such a window could never be named however many times
+# the session was renamed inside codex.
+#
+# What is left is correlation: a codex process writes its thread into the state
+# database within a second or two of starting, in the directory it was started
+# in. Matching on both is narrow enough to be useful and is deliberately WEAK --
+# the renamer debounces weak candidates before claiming a window, and the caller
+# discards any candidate whose title is not a real user-set name, so an
+# ambiguous match resolves itself rather than adopting the wrong name. One turn
+# commonly produces several threads (compaction spawns its own), and only the
+# one that was actually renamed carries a name.
+#
+# state_5.sqlite is the small database (17 MB where logs_2 was 795 MB), so this
+# stays cheap enough to run whenever the authoritative paths come up empty.
+codex_start_epoch() {
+  local pid
+  local earliest=""
+  local started
+
+  while read -r pid; do
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    # /proc/<pid> carries the process start time, within a second. The match
+    # window below is far wider than that error.
+    started="$(stat -c %Y "/proc/$pid" 2>/dev/null || true)"
+    case "$started" in ''|*[!0-9]*) continue ;; esac
+    if [ -z "$earliest" ] || [ "$started" -lt "$earliest" ]; then
+      earliest="$started"
+    fi
+  done <<EOF_PIDS
+$(printf '%s\n' "$rows" |
+  grep -Ei '(^|[ /.-])codex([ /.-]|$)|@openai/codex' |
+  awk '{ print $1 }')
+EOF_PIDS
+
+  [ -n "$earliest" ] || return 1
+  printf '%s\n' "$earliest"
+}
+
+thread_ids_from_cwd_start() {
+  local db="$codex_home/state_5.sqlite"
+  local window="${AI_SESSION_NAME_CODEX_START_WINDOW:-20}"
+  local started
+  local escaped_cwd
+
+  command -v sqlite3 >/dev/null 2>&1 || return 1
+  [ -r "$db" ] || return 1
+  [ -n "$pane_cwd" ] || return 1
+  case "$window" in ''|*[!0-9]*) window=20 ;; esac
+
+  started="$(codex_start_epoch)" || return 1
+  escaped_cwd="$(sql_escape "$pane_cwd")"
+
+  sqlite3 "$db" "
+    select id
+    from threads
+    where cwd = '$escaped_cwd'
+      and created_at_ms between $(( (started - window) * 1000 ))
+                            and $(( (started + window) * 1000 ))
+    order by created_at_ms desc;" 2>/dev/null
+}
+
 candidate_thread_refs() {
   local authoritative
   local alias_refs
+  local cwd_refs
 
   authoritative="$({
     thread_id_from_env || true
@@ -283,6 +384,14 @@ candidate_thread_refs() {
   alias_refs="$(thread_ids_from_resume_aliases || true)"
   if [ -n "$alias_refs" ]; then
     printf '%s\n' "$alias_refs" | awk 'NF { print "strong\t" $0 }'
+    return 0
+  fi
+
+  # Tried before the log database because it reads the small state database
+  # rather than the large one, and because that path is off by default.
+  cwd_refs="$(thread_ids_from_cwd_start || true)"
+  if [ -n "$cwd_refs" ]; then
+    printf '%s\n' "$cwd_refs" | awk 'NF && !seen[$0]++ { print "weak\t" $0 }'
     return 0
   fi
 
