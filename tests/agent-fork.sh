@@ -56,6 +56,11 @@ case "$out" in *"codex fork"*) ;; *) fail "codex: expected picker fallback, got:
 case "$out" in *"codex fork "*[!\ ]*) fail "codex: passed an argument with no id: $out" ;; esac
 ok "codex falls back to its picker when no id is recorded"
 
+t set-window-option -t "$win" @ai-session-name-thread-id 'bad; printf injected'
+out="$(run "$win" myfork)"
+case "$out" in *"invalid recorded Codex session ID"*) ;; *) fail "invalid id reached the launch command: $out" ;; esac
+ok "invalid recorded Codex identity is rejected before command construction"
+
 # --- pi: id known -> fork + name in one go ----------------------------------
 win="$(make_client pi)"
 t set-window-option -t "$win" @ai-session-name-thread-id "$id"
@@ -68,8 +73,9 @@ ok "pi forks by id and names the fork at launch"
 t set-window-option -t "$win" @ai-session-name-thread-id "pane:12345"
 out="$(run "$win" pifork)"
 case "$out" in *"--fork"*) fail "pi: passed a synthetic pane id to --fork: $out" ;; esac
-case "$out" in *"pi --resume"*) ;; *) fail "pi: expected --resume fallback, got: $out" ;; esac
-ok "pi ignores the synthetic pane identity and uses its picker"
+case "$out" in *"no recorded session ID"*) ;; *) fail "pi: expected missing-ID notice, got: $out" ;; esac
+case "$out" in *"pi --resume"*) fail "pi must not resume the original session as a fork: $out" ;; esac
+ok "pi refuses to resume the original when no forkable identity exists"
 
 # --- claude: picker, since the plugin records no identity for Claude ---------
 win="$(make_client claude)"

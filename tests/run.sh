@@ -48,6 +48,7 @@ printf 'ok - shell syntax\n'
 bash "$repo_dir/tests/codex-session-name.sh"
 bash "$repo_dir/tests/claude-session-name.sh"
 bash "$repo_dir/tests/agent-fork.sh"
+python3 "$repo_dir/tests/fork-prompt.py"
 
 fixture_proc="$tmp_dir/proc"
 fixture_sessions="$tmp_dir/sessions"

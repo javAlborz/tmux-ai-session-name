@@ -68,6 +68,13 @@ ownership state have not changed.
 
 ## Detection
 
+The optional `@ai-session-name-fork-key` binding opens a new window for a branch.
+Claude and Pi ask for the branch name in a tmux popup; input is read literally
+and an empty name cancels. Pi requires a real session ID instead of falling back
+to resuming the original session. Secure Pi processes advertising
+`PI_SAFE_TMUX_RUN` use the host's `~/bin/pi-safe-tmux` bridge and preserve their
+security lane. Older secure Pi processes must be restarted to load that bridge.
+
 Claude Code names are read from `--name`/`-n` arguments or from `/rename`
 records in Claude's project JSONL files. Auto-generated pane titles are ignored.
 

@@ -24,9 +24,21 @@ note() {
   return 0
 }
 
+# Read names directly from the popup's terminal. Never substitute prompt input
+# into a tmux run-shell template: quoting the final launch command is too late
+# once command-prompt has already evaluated a name containing $(...) or quotes.
+prompt=0
+if [ "${1:-}" = --prompt ]; then
+  prompt=1
+  shift
+fi
 win="${1:-}"
 fork_name="${2:-}"
 [ -n "$win" ] || { note "no window given"; exit 0; }
+if [ "$prompt" = 1 ]; then
+  IFS= read -r -p 'Fork name (empty to cancel): ' fork_name || exit 0
+  [ -n "$fork_name" ] || exit 0
+fi
 
 pane_pid="$(tmux display-message -pt "$win" -p '#{pane_pid}' 2>/dev/null)"
 pane_cwd="$(tmux display-message -pt "$win" -p '#{pane_current_path}' 2>/dev/null)"
@@ -76,6 +88,19 @@ done
 
 [ -n "$client" ] || { note "no agent session in $win"; exit 0; }
 
+# Secure Pi uses an in-memory session and a narrow host-only fork endpoint.
+# Keep its lane/workspace policy instead of launching the normal `pi` alias,
+# which may select a different lane and rejects raw --fork/--resume arguments.
+secure_pi_run=""
+if [ "$client" = pi ]; then
+  secure_pi_run="$(tr '\0' '\n' <"/proc/$p/environ" 2>/dev/null | sed -n 's/^PI_SAFE_TMUX_RUN=//p' | head -1)"
+  secure_pi_lane="$(tr '\0' '\n' <"/proc/$p/environ" 2>/dev/null | sed -n 's/^PI_SAFE_LANE=//p' | head -1)"
+  if [ -n "$secure_pi_lane" ] && [ -z "$secure_pi_run" ]; then
+    note "restart this secure Pi session to enable tmux branching"
+    exit 0
+  fi
+fi
+
 # A synthetic pane:<pid> identity is the generic provider's fallback when it
 # could not read a real session id; it is not forkable, so treat it as unknown
 # and let the client's own picker resolve it.
@@ -92,8 +117,8 @@ if [ -z "$fork_name" ] && [ "$client" != codex ]; then
     printf 'client=%s would prompt for a name\n' "$client"
     exit 0
   fi
-  tmux command-prompt -p "fork name:" \
-    "run-shell '$self \"$win\" \"%%\"'" 2>/dev/null
+  printf -v prompt_cmd '%q --prompt %q' "$self" "$win"
+  tmux display-popup -E -w 60 -h 5 -T 'Branch agent session' "$prompt_cmd" 2>/dev/null
   exit 0
 fi
 
@@ -103,7 +128,15 @@ fi
 # session's name and immediately recreate the duplicate-name problem.
 case "$client" in
   codex)
-    if [ -n "$thread_id" ]; then cmd="codex fork $thread_id"; else cmd="codex fork"; fi
+    if [ -n "$thread_id" ]; then
+      if [[ ! "$thread_id" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]; then
+        note "invalid recorded Codex session ID; wait for tmux to detect the session"
+        exit 0
+      fi
+      printf -v cmd 'codex fork %q' "$thread_id"
+    else
+      cmd="codex fork"
+    fi
     ;;
   claude)
     # The plugin records no identity for Claude windows, so the picker resolves
@@ -112,8 +145,30 @@ case "$client" in
     [ -n "$fork_name" ] && cmd="$cmd -n $(printf '%q' "$fork_name")"
     ;;
   pi)
-    if [ -n "$thread_id" ]; then cmd="pi --fork $thread_id"; else cmd="pi --resume"; fi
-    [ -n "$fork_name" ] && cmd="$cmd --name $(printf '%q' "$fork_name")"
+    if [ -n "$secure_pi_run" ]; then
+      if [ "${AGENT_FORK_DRY_RUN:-}" = 1 ]; then
+        printf 'client=pi secure branch via pi-safe-tmux\n'
+        exit 0
+      fi
+      ticket="$("$HOME/bin/pi-safe-tmux" fork "$secure_pi_run" "$fork_name" 2>&1)" || {
+        note "$ticket"
+        exit 0
+      }
+      printf -v cmd '%q --tmux-branch %q' "$HOME/bin/pi-safe" "$ticket"
+    elif [ -n "$thread_id" ]; then
+      # On hosts with a safe `pi` alias, a trusted upstream session must continue
+      # through its own executable. It must never switch an existing safe lane.
+      pi_executable="$(readlink -f "/proc/$p/exe" 2>/dev/null)"
+      pi_script="$(tr '\0' '\n' <"/proc/$p/cmdline" 2>/dev/null | sed -n '2p')"
+      if [ "${pi_executable##*/}" = node ] && [ -f "$pi_script" ]; then
+        printf -v cmd '%q %q --fork %q --name %q' "$pi_executable" "$pi_script" "$thread_id" "$fork_name"
+      else
+        printf -v cmd 'pi --fork %q --name %q' "$thread_id" "$fork_name"
+      fi
+    else
+      note "Pi has no recorded session ID; name the session and wait for tmux to detect it"
+      exit 0
+    fi
     ;;
 esac
 

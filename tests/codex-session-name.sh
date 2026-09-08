@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Real-PID fixtures below must not inherit the invoking coding agent's identity.
+# Restart once with clean process environment: /proc exposes the startup env,
+# so unsetting the variable inside this already-running shell is insufficient.
+if [ -n "${CODEX_THREAD_ID:-}" ] || [ -n "${CODEX_SESSION_ID:-}" ]; then
+  exec env -u CODEX_THREAD_ID -u CODEX_SESSION_ID bash "$0" "$@"
+fi
+
 plugin_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 script="$plugin_dir/scripts/codex-session-name.sh"
 tmp_root="$(mktemp -d)"
