@@ -32,9 +32,10 @@ run() { PATH="$shim:$PATH" AGENT_FORK_DRY_RUN=1 bash "$script" "$@" 2>&1; }
 # A stand-in whose process name is the client we want detected.
 make_client() {
   local name="$1"
-  cp /usr/bin/sleep "$tmp/$name"
+  local fixture_env="${2:-}"
+  [ -e "$tmp/$name" ] || cp /usr/bin/sleep "$tmp/$name"
   t kill-session -t probe 2>/dev/null || true
-  t new-session -d -s probe -c "$tmp" "$tmp/$name 120"
+  t new-session -d -s probe -c "$tmp" "$fixture_env $tmp/$name 120"
   sleep 0.5
   t list-windows -F '#{window_id}' | head -1
 }
@@ -119,5 +120,16 @@ for client in claude pi; do
   case "$out" in *"would prompt"*) ;; *) fail "$client should ask for a name: $out" ;; esac
 done
 ok "claude and pi are asked for a name, which they apply at launch"
+
+win="$(make_client pi 'env PI_SAFE_LANE=home PI_SAFE_TMUX_RUN=/tmp/fixture-run')"
+out="$(run "$win" 'secure branch')"
+case "$out" in *"secure branch via pi-safe-tmux"*) ;; *) fail "secure Pi did not select its restricted bridge: $out" ;; esac
+case "$out" in *"pi --fork"*|*"pi --resume"*) fail "secure Pi reached an unrestricted launch: $out" ;; esac
+ok "secure Pi selects its own bridge instead of the public pi alias"
+
+win="$(make_client pi 'env PI_SAFE_LANE=home')"
+out="$(run "$win" 'secure branch')"
+case "$out" in *"restart this secure Pi session"*) ;; *) fail "old secure Pi should request a restart: $out" ;; esac
+ok "older secure Pi processes report that the bridge requires a restart"
 
 printf 'all agent-fork tests passed\n'
