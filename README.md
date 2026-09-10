@@ -75,27 +75,26 @@ to resuming the original session. Secure Pi processes advertising
 `PI_SAFE_TMUX_RUN` use the host's `~/bin/pi-safe-tmux` bridge and preserve their
 security lane. Older secure Pi processes must be restarted to load that bridge.
 
-Claude Code names are read from `--name`/`-n` arguments or from `/rename`
-records in Claude's project JSONL files. Auto-generated pane titles are ignored.
+Claude Code names are read from verified `/rename` records in Claude's project
+JSONL files, then from `--name`/`-n` launch arguments. Arguments retain their
+original NUL boundaries. Auto-generated pane titles are ignored.
 
-Codex names are resolved by mapping the live Codex process to a thread, then
-reading that thread's `title` from `~/.codex/state_5.sqlite` only when it appears
-user-provided. Generated titles are ignored by requiring `title` to differ from
-`first_user_message`, or for `first_user_message` to be empty.
+On Linux, Codex identity comes first from the primary foreground process's open
+rollout headers. Auxiliary threads are excluded. When an in-process fork retains
+ancestor writers, an explicit chain with one leaf identifies the current
+session; unrelated open sessions remain ambiguous. This live check runs before
+cached names or launch arguments, which can become stale after a session switch.
 
-Codex thread identity is resolved in priority order: explicit environment or
-resume UUID, shell snapshot UUID, `codex resume <name>` alias, then weak process
-log history. The alias path uses the newest matching Codex session index/state
-entry. It is intentionally lower priority than a UUID so an active fork cannot
-inherit an older name from stale logs.
+Codex display names use the current database's `name` column. Older schemas
+retain the `title` fallback only when it differs from `first_user_message` or
+that message is empty. An unnamed live session still has a usable identity.
+Launch UUIDs, shell snapshots, resume aliases and opt-in process log history
+remain compatibility fallbacks for naming when live identity is unavailable.
 
-A resume UUID also contributes the threads that share its `process_uuid`, since
-Codex forks a new thread id inside the same running process on compaction and on
-new turns, leaving the launch-time UUID behind. Those successors are restricted
-to the pane's own Codex pids: a thread outlives the run that created it, so an
-unrelated older session may hold log rows against the same anchor, and without
-that restriction its name is reachable from this pane. They are reported as weak
-so the debounce applies.
+The fork binding refreshes Codex identity when pressed and requires a unique
+live session. It refuses an unverified source instead of using the daemon's
+stored window ID. Codex is renamed inside the branch with `/rename`; Claude
+uses its native session picker before branching.
 
 Claude Code windows deliberately carry no identity, so `@ai-session-name-thread-id`
 stays unset for them. Claude exposes no stable per-session id to the pane: the
@@ -128,24 +127,7 @@ store. The generic provider requires `jq`.
 tests/run.sh
 ```
 
-The test uses an isolated tmux server and covers provider metadata, dispatcher
-identity, automatic-name restoration, global application-rename policy, and
-manual override ownership.
-
-## Identity and branching
-
-On Linux, Codex resolution reads the primary foreground process's open rollout
-headers before any launch-time fallback. Auxiliary threads are excluded. When
-an in-process fork retains ancestor writers, an explicit chain with one leaf
-identifies the current session; unrelated open sessions remain ambiguous.
-Display names use the current database's `name` column, including unnamed
-sessions whose identity is still usable. Older schemas retain their fallback.
-
-`prefix+B` refreshes the live Codex identity when pressed and refuses an
-unverified source. It does not trust the daemon's last stored window ID. Claude
-uses its session picker; Pi retains its existing bridge or explicit fork route.
-A verified Claude rename takes precedence over its launch name, and launch
-arguments are read with their original NUL boundaries.
-
-Run `bash tests/run.sh` for isolated resolver, tmux, fork, and popup regressions.
-The suite never forks a real agent session.
+The suite uses isolated tmux servers and covers provider metadata, live session
+identity, automatic-name restoration, global application-rename policy, manual
+override ownership, fork dispatch, and popup input. It never forks a real agent
+session.
