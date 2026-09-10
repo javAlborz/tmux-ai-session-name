@@ -38,10 +38,14 @@ make_client() {
   if [ "$name" = codex ]; then
     mkdir -p "$tmp/codex-home/sessions"
     printf '{"type":"session_meta","payload":{"id":"%s","source":"cli"}}\n' "$id" > "$tmp/codex-home/sessions/rollout-fixture.jsonl"
-    t new-session -d -s probe -c "$tmp" "env CODEX_HOME=$tmp/codex-home $tmp/$name 120 7<$tmp/codex-home/sessions/rollout-fixture.jsonl"
+    t -f /dev/null new-session -d -s probe -c "$tmp" "env CODEX_HOME=$tmp/codex-home $tmp/$name 120 7<$tmp/codex-home/sessions/rollout-fixture.jsonl"
   else
-    t new-session -d -s probe -c "$tmp" "$fixture_env $tmp/$name 120"
+    t -f /dev/null new-session -d -s probe -c "$tmp" "$fixture_env $tmp/$name 120"
   fi
+  # Do not load the user's plugins: a live naming daemon can take the rename
+  # lock while this test expects a synchronous pass. Set the expected format
+  # explicitly instead of inheriting it from the user's tmux configuration.
+  t set-option -g @ai-session-name-format '#{session}'
   sleep 0.5
   t list-windows -F '#{window_id}' | head -1
 }
