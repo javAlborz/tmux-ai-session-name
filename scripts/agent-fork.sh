@@ -1,12 +1,8 @@
 #!/usr/bin/env bash
 # Fork the agent session running in a tmux window into a NEW window (prefix + B).
 #
-# The point is to never handle a session id by hand. Codex mints a new thread id
-# every turn and carries the session NAME onto each one, so resuming by name
-# resolves to "whichever thread most recently held that name" -- never the point
-# you meant to branch from. The id is the only stable anchor, and the naming
-# plugin already records it per window in @ai-session-name-thread-id, so this
-# reads it from there instead of asking you to type a UUID.
+# Resolve the session again when the key is pressed. A process may have switched
+# sessions since the naming daemon last ran, even if the window name is correct.
 #
 # Forking never disturbs the source: every client mints a new session id for the
 # fork and leaves the original untouched, so the same window can be branched
@@ -128,14 +124,21 @@ fi
 # session's name and immediately recreate the duplicate-name problem.
 case "$client" in
   codex)
+    # Cached window IDs and resume arguments can refer to a previous session.
+    result="$(env -u AI_SESSION_NAME_PROCESS_TABLE_FILE AI_SESSION_NAME_CACHE_FILE= AI_SESSION_NAME_REPORT_ID=1 \
+      "${self%/*}/session-name-for-pane.sh" "$pane_pid" "$pane_cwd" "" 2>/dev/null || true)"
+    rest="${result#*$'\t'}"
+    thread_id="${rest%%$'\t'*}"
+    if [ "${result%%$'\t'*}" != codex ] || [ "${result##*$'\t'}" != live ] || [ -z "$thread_id" ]; then
+      note "cannot verify the current Codex session; no branch was created"
+      exit 0
+    fi
     if [ -n "$thread_id" ]; then
       if [[ ! "$thread_id" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]; then
         note "invalid recorded Codex session ID; wait for tmux to detect the session"
         exit 0
       fi
       printf -v cmd 'codex fork %q' "$thread_id"
-    else
-      cmd="codex fork"
     fi
     ;;
   claude)

@@ -46,6 +46,7 @@ done < <(find "$repo_dir" -maxdepth 2 -type f \( -name '*.sh' -o -name '*.tmux' 
 printf 'ok - shell syntax\n'
 
 bash "$repo_dir/tests/codex-session-name.sh"
+python3 "$repo_dir/tests/session-identity.py"
 bash "$repo_dir/tests/claude-session-name.sh"
 bash "$repo_dir/tests/agent-fork.sh"
 python3 "$repo_dir/tests/fork-prompt.py"
@@ -290,7 +291,21 @@ tmux set-option -g @ai-session-name-fork-key B
 bash "$repo_dir/ai-session-name.tmux"
 assert_eq "1" "$(tmux list-keys -T prefix | grep -cE '^bind-key\s+-T prefix\s+B ' || true)" \
   "fork key is bound when configured"
+tmux set-option -g @ai-session-name-enabled off
+bash "$repo_dir/ai-session-name.tmux"
+assert_eq "0" "$(tmux list-keys -T prefix | grep -cE '^bind-key\s+-T prefix\s+B ' || true)" "disabling plugin removes its fork binding"
+tmux set-option -g @ai-session-name-enabled on
+bash "$repo_dir/ai-session-name.tmux"
+tmux bind-key B display-message user-owned
 tmux set-option -gu @ai-session-name-fork-key
+bash "$repo_dir/ai-session-name.tmux"
+assert_eq "1" "$(tmux list-keys -T prefix | grep -c user-owned)" "unsetting fork key preserves a user's replacement"
+tmux unbind-key B
+tmux set-option -g @ai-session-name-fork-key B
+bash "$repo_dir/ai-session-name.tmux"
+tmux set-option -gu @ai-session-name-fork-key
+bash "$repo_dir/ai-session-name.tmux"
+assert_eq "0" "$(tmux list-keys -T prefix | grep -cE '^bind-key\s+-T prefix\s+B ' || true)" "removing fork key removes its binding"
 
 bash "$repo_dir/ai-session-name.tmux"
 bash "$repo_dir/ai-session-name.tmux"

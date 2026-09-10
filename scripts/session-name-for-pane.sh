@@ -13,24 +13,9 @@ if [ -r "$script_dir/cache-lib.sh" ]; then
   . "$script_dir/cache-lib.sh"
 fi
 
-# Outer cache: key by pane_pid + cleaned title. Cache the full output of
-# detection (tool<TAB>session). On hit we skip the process-tree walk and
-# the tool-specific scripts entirely.
+# Resolve identity on every pass: PID/title survive in-process session switches.
 report_tool_only="${AI_SESSION_NAME_REPORT_TOOL_ONLY:-}"
 report_id="${AI_SESSION_NAME_REPORT_ID:-}"
-cleaned_pane_title="$(printf '%s' "$pane_title" | sed -E 's/^[[:space:]]*[^[:alnum:][:space:]]+[[:space:]]+//; s/[[:space:]]+/ /g; s/^ //; s/ $//')"
-outer_cache_key="pane|${pane_pid}|${cleaned_pane_title}|id:${report_id}"
-
-if [ "$report_tool_only" != "1" ] && command -v cache_lookup >/dev/null 2>&1; then
-  cached_value="$(cache_lookup "$outer_cache_key" 10)"
-  cache_rc=$?
-  if [ "$cache_rc" -eq 0 ]; then
-    printf '%s\n' "${cached_value//$'\x1f'/$'\t'}"
-    exit 0
-  elif [ "$cache_rc" -eq 2 ]; then
-    exit 1
-  fi
-fi
 
 process_table() {
   if [ -n "${AI_SESSION_NAME_PROCESS_TABLE_FILE:-}" ] && [ -r "${AI_SESSION_NAME_PROCESS_TABLE_FILE}" ]; then
@@ -74,12 +59,7 @@ EOF
   done
 }
 
-negative_exit() {
-  if [ "$report_tool_only" != "1" ] && command -v cache_store >/dev/null 2>&1; then
-    cache_store "$outer_cache_key" ""
-  fi
-  exit 1
-}
+negative_exit() { exit 1; }
 
 rows="$(descendant_rows "$pane_pid")"
 rows_with_root="$(process_table | awk -v pid="$pane_pid" '$1 == pid { print }'; printf '%s\n' "$rows")"
@@ -148,6 +128,15 @@ if [ -z "${session:-}" ] && [ "$report_tool_only" = "1" ]; then
   exit 2
 fi
 
+if [ "$report_id" = 1 ] && [ "$tool" = codex ]; then
+  case "$confidence" in
+    live|ambiguous)
+      printf '%s\t%s\t%s\t%s\n' "$tool" "$identity" "${session:-}" "$confidence"
+      exit 0
+      ;;
+  esac
+fi
+
 [ -n "${session:-}" ] || negative_exit
 session="$(printf '%s' "$session" | sed -E 's/^[[:space:]]*[^[:alnum:][:space:]]+[[:space:]]+//; s/[[:space:]]+/ /g; s/^ //; s/ $//')"
 [ -n "$session" ] || negative_exit
@@ -171,8 +160,5 @@ if [ "$report_id" = "1" ]; then
   fi
 else
   output="$(printf '%s\t%s' "$tool" "$session")"
-fi
-if [ "$report_tool_only" != "1" ] && command -v cache_store >/dev/null 2>&1; then
-  cache_store "$outer_cache_key" "${output//$'\t'/$'\x1f'}"
 fi
 printf '%s\n' "$output"

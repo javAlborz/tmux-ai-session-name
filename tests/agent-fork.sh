@@ -35,7 +35,13 @@ make_client() {
   local fixture_env="${2:-}"
   [ -e "$tmp/$name" ] || cp /usr/bin/sleep "$tmp/$name"
   t kill-session -t probe 2>/dev/null || true
-  t new-session -d -s probe -c "$tmp" "$fixture_env $tmp/$name 120"
+  if [ "$name" = codex ]; then
+    mkdir -p "$tmp/codex-home/sessions"
+    printf '{"type":"session_meta","payload":{"id":"%s","source":"cli"}}\n' "$id" > "$tmp/codex-home/sessions/rollout-fixture.jsonl"
+    t new-session -d -s probe -c "$tmp" "env CODEX_HOME=$tmp/codex-home $tmp/$name 120 7<$tmp/codex-home/sessions/rollout-fixture.jsonl"
+  else
+    t new-session -d -s probe -c "$tmp" "$fixture_env $tmp/$name 120"
+  fi
   sleep 0.5
   t list-windows -F '#{window_id}' | head -1
 }
@@ -48,19 +54,39 @@ t set-window-option -t "$win" @ai-session-name-thread-id "$id"
 out="$(run "$win" myfork)"
 case "$out" in *"codex fork $id"*) ;; *) fail "codex: expected exact fork, got: $out" ;; esac
 case "$out" in *"-n myfork"*|*"--name myfork"*) fail "codex: must not pass a name flag: $out" ;; esac
-ok "codex forks the exact recorded thread id, without a name flag"
+ok "codex forks the verified open thread, without a name flag"
 
-# --- codex: id unknown -> picker rather than a malformed command -------------
-t set-window-option -t "$win" -u @ai-session-name-thread-id
+# Window metadata may be stale, absent, or malformed. The live file wins.
+for cached in '' 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' 'bad; printf injected'; do
+  t set-window-option -t "$win" @ai-session-name-thread-id "$cached"
+  out="$(run "$win" myfork)"
+  case "$out" in *"codex fork $id"*) ;; *) fail "cached identity overrode the open session: $out" ;; esac
+done
+ok "missing, stale and malformed recorded IDs cannot redirect the branch"
+rm "$tmp/codex-home/sessions/rollout-fixture.jsonl"
 out="$(run "$win" myfork)"
-case "$out" in *"codex fork"*) ;; *) fail "codex: expected picker fallback, got: $out" ;; esac
-case "$out" in *"codex fork "*[!\ ]*) fail "codex: passed an argument with no id: $out" ;; esac
-ok "codex falls back to its picker when no id is recorded"
+case "$out" in *"cannot verify the current Codex session"*) ;; *) fail "unverified session was branchable: $out" ;; esac
+ok "an unverified current session is not branched"
 
-t set-window-option -t "$win" @ai-session-name-thread-id 'bad; printf injected'
-out="$(run "$win" myfork)"
-case "$out" in *"invalid recorded Codex session ID"*) ;; *) fail "invalid id reached the launch command: $out" ;; esac
-ok "invalid recorded Codex identity is rejected before command construction"
+# Naming and branch identity remain independent for unnamed/manual windows.
+win="$(make_client codex)"
+renamer="${script%/*}/rename-windows.sh"
+rename_pass() { PATH="$shim:$PATH" AI_SESSION_NAME_PLUGIN_DIR="${script%/scripts/agent-fork.sh}" AI_SESSION_NAME_RUNTIME_DIR="$tmp" bash "$renamer"; }
+t rename-window -t "$win" manual-base
+rename_pass
+[ "$(t show-options -wqv -t "$win" @ai-session-name-thread-id)" = "$id" ] || fail "unnamed session identity was lost"
+[ "$(t display-message -pt "$win" '#{window_name}')" = manual-base ] || fail "unnamed session overwrote a manual name"
+printf '{"id":"%s","thread_name":"Current session"}\n' "$id" > "$tmp/codex-home/session_index.jsonl"
+rename_pass
+[ "$(t display-message -pt "$win" '#{window_name}')" = 'Current session' ] || fail "named current session was not adopted"
+t select-pane -t "$win" -T ''
+rename_pass
+[ "$(t show-options -wqv -t "$win" @ai-session-name-owned)" = 1 ] || fail "empty pane title falsely released naming ownership"
+t rename-window -t "$win" pinned-name
+rename_pass
+[ "$(t display-message -pt "$win" '#{window_name}')" = pinned-name ] || fail "manual override was not preserved"
+[ "$(t show-options -wqv -t "$win" @ai-session-name-thread-id)" = "$id" ] || fail "manual override erased branch identity"
+ok "unnamed and manually named windows retain a verified branch identity"
 
 # --- pi: id known -> fork + name in one go ----------------------------------
 win="$(make_client pi)"

@@ -10,6 +10,20 @@ report_id="${AI_SESSION_NAME_REPORT_ID:-}"
 codex_home="${CODEX_HOME:-$HOME/.codex}"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Check open session identity before any cache or launch-time fallback. A
+# session switch does not change the pane PID, title or process arguments.
+if live_result="$(python3 "$script_dir/codex-live-session.py" "$rows")"; then
+  if [ "$report_id" = 1 ]; then
+    printf '%s\n' "$live_result"
+  else
+    rest="${live_result#*$'\t'}"
+    name="${rest%%$'\t'*}"
+    [ -n "$name" ] || exit 1
+    printf '%s\n' "$name"
+  fi
+  exit 0
+fi
 if [ -r "$script_dir/cache-lib.sh" ]; then
   # shellcheck disable=SC1091
   . "$script_dir/cache-lib.sh"
@@ -166,7 +180,11 @@ sqlite_thread_ids_for_alias() {
   [ -r "$db" ] || return 1
 
   escaped_alias="$(sql_escape "$alias")"
-  sqlite3 "$db" "select id from threads where title = '$escaped_alias' and title != '' and (first_user_message = '' or title != first_user_message) order by updated_at desc limit 1;" 2>/dev/null
+  if sqlite3 "$db" 'pragma table_info(threads)' | cut -d'|' -f2 | grep -qx name; then
+    sqlite3 -readonly "$db" "select id from threads where name = '$escaped_alias' and name != '' order by updated_at desc limit 1;" 2>/dev/null
+  else
+    sqlite3 -readonly "$db" "select id from threads where title = '$escaped_alias' and title != '' and (first_user_message = '' or title != first_user_message) order by updated_at desc limit 1;" 2>/dev/null
+  fi
 }
 
 thread_ids_from_resume_aliases() {
@@ -405,8 +423,11 @@ sqlite_user_title_for_thread() {
   command -v sqlite3 >/dev/null 2>&1 || return 1
   [ -r "$db" ] || return 1
 
-  sqlite3 "$db" "select nullif(title,'') from threads where id = '$(sql_escape "$thread_id")' and title != '' and (first_user_message = '' or title != first_user_message) limit 1;" 2>/dev/null |
-    head -1
+  if sqlite3 "$db" 'pragma table_info(threads)' | cut -d'|' -f2 | grep -qx name; then
+    sqlite3 -readonly "$db" "select nullif(name,'') from threads where id = '$(sql_escape "$thread_id")' limit 1;" 2>/dev/null
+  else
+    sqlite3 -readonly "$db" "select nullif(title,'') from threads where id = '$(sql_escape "$thread_id")' and title != '' and (first_user_message = '' or title != first_user_message) limit 1;" 2>/dev/null | head -1
+  fi
 }
 
 sqlite_first_user_message_for_thread() {

@@ -358,20 +358,24 @@ release_unresolved_plugin_owned_window() {
 # override lock, which makes the plugin ignore that window from then on.
 seen_windows=" "
 
-tmux list-panes -a -F '#{session_id}	#{window_id}	#{pane_id}	#{pane_active}	#{pane_pid}	#{pane_current_path}	#{pane_title}	#{window_name}' |
+# Prefix every field so Bash read cannot collapse an empty title/path and
+# mistake the shifted window name for a manual override. Tmux escapes other
+# control separators, so keep its supported tab-delimited output.
+tmux list-panes -a -F $'s#{session_id}\tw#{window_id}\tp#{pane_id}\ta#{pane_active}\tr#{pane_pid}\tc#{pane_current_path}\tt#{pane_title}\tn#{window_name}' |
 while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_cwd pane_title window_name; do
+  window_id="${window_id#w}"
+  pane_id="${pane_id#p}"
+  pane_active="${pane_active#a}"
+  pane_pid="${pane_pid#r}"
+  pane_cwd="${pane_cwd#c}"
+  pane_title="${pane_title#t}"
+  window_name="${window_name#n}"
   [ "$pane_active" = "1" ] || continue
   case "$seen_windows" in
     *" $window_id "*) continue ;;
   esac
   seen_windows="$seen_windows$window_id "
   owned="$(window_option "$window_id" "$owned_option")"
-  existing_identity="$(window_option "$window_id" "$thread_id_option")"
-  if [ "$owned" = "1" ] && [ -n "$existing_identity" ] && identity_owned_by_other_window "$window_id" "$existing_identity"; then
-    restore_plugin_owned_window "$window_id" "$pane_cwd" "$window_name"
-    continue
-  fi
-
   result="$(AI_SESSION_NAME_REPORT_ID=1 "$detect_script" "$pane_pid" "$pane_cwd" "$pane_title" 2>/dev/null || true)"
   if [ -z "$result" ]; then
     unset_window_option_if_set "$window_id" "$manual_identity_option"
@@ -444,6 +448,16 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
     fi
   fi
   [ -n "$tool" ] || continue
+  # Track identity independently of display names, including unnamed sessions.
+  if [ -z "$session" ] && { [ "$confidence" = live ] || [ "$confidence" = ambiguous ]; }; then
+    release_unresolved_plugin_owned_window "$window_id" "$pane_cwd" "$window_name"
+    if [ -n "$identity" ]; then
+      set_window_option_if_changed "$window_id" "$thread_id_option" "$identity"
+    else
+      unset_window_option_if_set "$window_id" "$thread_id_option"
+    fi
+    continue
+  fi
   [ -n "$session" ] || session="$tool"
 
   detection_identity="$identity"
@@ -451,6 +465,7 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
   manual_identity="$(window_option "$window_id" "$manual_identity_option")"
   if [ -n "$manual_identity" ]; then
     if [ "$manual_identity" = "$detection_identity" ]; then
+      [ -z "$identity" ] || set_window_option_if_changed "$window_id" "$thread_id_option" "$identity"
       continue
     fi
     unset_window_option_if_set "$window_id" "$manual_identity_option"
@@ -464,6 +479,7 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
   plugin_name="$(window_option "$window_id" "$current_name_option")"
   if [ "$owned" = "1" ] && [ -n "$plugin_name" ] && [ "$window_name" != "$plugin_name" ]; then
     release_for_manual_override "$window_id" "$detection_identity"
+    [ -z "$identity" ] || set_window_option_if_changed "$window_id" "$thread_id_option" "$identity"
     continue
   fi
 

@@ -131,3 +131,21 @@ tests/run.sh
 The test uses an isolated tmux server and covers provider metadata, dispatcher
 identity, automatic-name restoration, global application-rename policy, and
 manual override ownership.
+
+## Identity and branching
+
+On Linux, Codex resolution reads the primary foreground process's open rollout
+headers before any launch-time fallback. Auxiliary threads are excluded. When
+an in-process fork retains ancestor writers, an explicit chain with one leaf
+identifies the current session; unrelated open sessions remain ambiguous.
+Display names use the current database's `name` column, including unnamed
+sessions whose identity is still usable. Older schemas retain their fallback.
+
+`prefix+B` refreshes the live Codex identity when pressed and refuses an
+unverified source. It does not trust the daemon's last stored window ID. Claude
+uses its session picker; Pi retains its existing bridge or explicit fork route.
+A verified Claude rename takes precedence over its launch name, and launch
+arguments are read with their original NUL boundaries.
+
+Run `bash tests/run.sh` for isolated resolver, tmux, fork, and popup regressions.
+The suite never forks a real agent session.

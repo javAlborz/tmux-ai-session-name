@@ -29,12 +29,6 @@ clean_title() {
   printf '%s\n' "$title"
 }
 
-name_from_args="$(printf '%s\n' "$rows" | awk '$3 == "claude"' | sed -nE 's/.*(^|[[:space:]])(-n|--name)(=|[[:space:]])"?([^"[:space:]]([^"]*[^"[:space:]])?)"?.*/\4/p' | head -1)"
-if [ -n "$name_from_args" ]; then
-  printf '%s\n' "$name_from_args"
-  exit 0
-fi
-
 project_dir_for_cwd() {
   local cwd="$1"
   local encoded
@@ -119,7 +113,7 @@ case "$title" in
         printf '%s\n' "$cached_value"
         exit 0
       elif [ "$cache_rc" -eq 2 ]; then
-        exit 1
+        : # A missing rename record may still have an explicit launch name.
       fi
     fi
 
@@ -134,4 +128,25 @@ case "$title" in
     ;;
 esac
 
-exit 1
+# Only use the launch name after checking the current verified title. Read
+# NUL-delimited argv: flattened ps output cannot distinguish names from flags.
+name_from_args="$(python3 - "$rows" <<'PY'
+import os, pathlib, sys
+root = pathlib.Path(os.environ.get('AI_SESSION_NAME_PROC_ROOT', '/proc'))
+for row in sys.argv[1].splitlines():
+    parts = row.split(None, 3)
+    if len(parts) < 3 or parts[2] != 'claude':
+        continue
+    try:
+        args = (root / parts[0] / 'cmdline').read_bytes().decode().split('\0')
+    except (OSError, UnicodeError):
+        continue
+    for i, arg in enumerate(args):
+        if arg in ('-n', '--name') and i + 1 < len(args):
+            print(args[i + 1]); sys.exit(0)
+        if arg.startswith('--name='):
+            print(arg[7:]); sys.exit(0)
+PY
+)"
+[ -n "$name_from_args" ] || exit 1
+printf '%s\n' "$name_from_args"

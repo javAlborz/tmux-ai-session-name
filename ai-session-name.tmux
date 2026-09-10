@@ -41,6 +41,19 @@ for hook in client-attached session-created after-new-window; do
 done
 
 enabled="$(get_tmux_option "@ai-session-name-enabled" "on")"
+# Remove only bindings still owned by this plugin, including older installs
+# without ownership metadata. Preserve user replacements on the same key.
+fork_key="$(get_tmux_option "@ai-session-name-fork-key" "")"
+while IFS= read -r binding; do
+  case "$binding" in
+    *"$CURRENT_DIR/scripts/agent-fork.sh"*)
+      key="$(printf '%s\n' "$binding" | awk '{print $4}')"
+      if [ "$enabled" != on ] || [ "$key" != "$fork_key" ]; then
+        tmux unbind-key "$key"
+      fi
+      ;;
+  esac
+done < <(tmux list-keys -T prefix 2>/dev/null)
 if [ "$enabled" != "on" ]; then
   for hook in client-attached session-created after-new-window; do
     tmux set-hook -gu "${hook}[$hook_index]" 2>/dev/null || true
@@ -55,9 +68,8 @@ done
 
 # Optional key that branches the agent session in the current window into a new
 # window. It lives here because it consumes this plugin's own record of which
-# session is in which window (@ai-session-name-thread-id): an agent session name
-# is not a usable anchor, since Codex mints a new thread id every turn and
-# carries the name onto each one.
+# session is in which window (@ai-session-name-thread-id): launch names can outlive a session switch, so Codex
+# branching also verifies the current open session when the key is pressed.
 #
 # Unset by default. A plugin that otherwise only observes should not claim a key
 # or spawn processes without being asked, so the binding is opt-in:
