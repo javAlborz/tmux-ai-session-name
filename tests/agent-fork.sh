@@ -7,6 +7,7 @@ set -euo pipefail
 script="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/agent-fork.sh"
 socket="agent-fork-test-$$"
 tmp="$(mktemp -d)"
+export XDG_STATE_HOME="$tmp/state"
 real_tmux="$(command -v tmux)"
 
 cleanup() {
@@ -81,6 +82,9 @@ rename_pass
 [ "$(t show-options -wqv -t "$win" @ai-session-name-thread-id)" = "$id" ] || fail "unnamed session identity was lost"
 [ "$(t display-message -pt "$win" '#{window_name}')" = manual-base ] || fail "unnamed session overwrote a manual name"
 printf '{"id":"%s","thread_name":"Current session"}\n' "$id" > "$tmp/codex-home/session_index.jsonl"
+rename_pass
+[ "$(t display-message -pt "$win" '#{window_name}')" = manual-base ] || fail "a saved title overwrote an explicit window name"
+t set-window-option -t "$win" automatic-rename on
 rename_pass
 [ "$(t display-message -pt "$win" '#{window_name}')" = 'Current session' ] || fail "named current session was not adopted"
 t select-pane -t "$win" -T ''

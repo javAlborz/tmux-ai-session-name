@@ -13,6 +13,7 @@ real_tmux="$(command -v tmux)"
 # pid, so an ephemeral test server otherwise leaves a pair behind in
 # XDG_RUNTIME_DIR on every run, which no later run ever reclaims.
 export AI_SESSION_NAME_RUNTIME_DIR="$tmp_dir"
+export XDG_STATE_HOME="$tmp_dir/state"
 
 cleanup() {
   env -u TMUX "$real_tmux" -L "$socket_name" kill-server >/dev/null 2>&1 || true
@@ -47,6 +48,8 @@ printf 'ok - shell syntax\n'
 
 bash "$repo_dir/tests/codex-session-name.sh"
 python3 "$repo_dir/tests/session-identity.py"
+python3 "$repo_dir/tests/name-ownership.py"
+python3 "$repo_dir/tests/name-audit.py"
 bash "$repo_dir/tests/claude-session-name.sh"
 bash "$repo_dir/tests/agent-fork.sh"
 python3 "$repo_dir/tests/fork-prompt.py"
@@ -264,6 +267,7 @@ assert_eq "" "$(tmux show-option -w -t "$session_name:" -qv @ai-session-name-own
 stop_live_task
 tmux rename-window -t "$session_name:" "bash"
 tmux set-window-option -t "$session_name:" -u @ai-session-name-manual-identity
+tmux set-window-option -t "$session_name:" automatic-rename on
 tmux new-session -d -s "${session_name}-grouped" -t "$session_name"
 assert_eq "2" "$(tmux list-panes -a -F '#{window_id}' | grep -c .)" \
   "grouped session reports the shared window twice"

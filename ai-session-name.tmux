@@ -55,11 +55,18 @@ while IFS= read -r binding; do
   esac
 done < <(tmux list-keys -T prefix 2>/dev/null)
 if [ "$enabled" != "on" ]; then
+  tmux set-hook -gu "after-rename-window[$hook_index]" 2>/dev/null || true
   for hook in client-attached session-created after-new-window; do
     tmux set-hook -gu "${hook}[$hook_index]" 2>/dev/null || true
   done
   exit 0
 fi
+
+# Capture the command even when the chosen name equals the current title.
+# A synchronous hook observes the internal-rename marker before its writer
+# clears it. Pass only tmux's stable window ID through the shell.
+tmux set-hook -g "after-rename-window[$hook_index]" \
+  "run-shell 'bash \"$CURRENT_DIR/scripts/manual-name.sh\" \"#{window_id}\"'"
 
 setsid -f bash "$CURRENT_DIR/scripts/rename-daemon.sh" </dev/null >/dev/null 2>&1
 for hook in client-attached session-created after-new-window; do

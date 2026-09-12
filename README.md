@@ -1,8 +1,8 @@
 # tmux-ai-session-name
 
-Rename tmux windows from explicitly named coding sessions.
+Follow coding session titles while preserving explicit tmux window names.
 
-The plugin watches the active pane in each tmux window. It resolves explicit
+The plugin watches the active pane in each tmux window. It resolves saved
 session names from Claude Code, Codex, and clients that expose the generic JSONL
 session-directory contract described below.
 
@@ -32,6 +32,7 @@ set -g @ai-session-name-restore-unnamed 'off'
 set -g @ai-session-name-release-unnamed-after '10'
 set -g @ai-session-name-debounce-ticks '2'
 set -g @ai-session-name-fallback ''
+set -g @ai-session-name-diagnostics 'on'
 ```
 
 `@ai-session-name-restore` renames a window back when the active pane is no
@@ -58,8 +59,24 @@ debounced.
 The plugin does not change tmux's `allow-rename` option. When it claims a window,
 it remembers the current name and `automatic-rename` state, then pauses automatic
 naming. When it releases the window, it restores both. A manual `rename-window`
-while the plugin owns a window releases ownership and wins until that detected
-session goes away.
+releases ownership and wins across detection failures and conversation changes.
+Names set before the plugin's first pass, including `new-window -n`, are also
+preserved when tmux has disabled automatic naming locally. Inherited global
+`automatic-rename` settings do not imply that a particular window was named.
+The current conversation ID continues to update under a manual display name.
+
+Use the usual tmux `prefix+,` to name a window. To let it follow session titles
+again, run `set-window-option automatic-rename on` from the tmux command prompt
+(`prefix+:`). `/rename` inside Codex changes that conversation's saved title;
+an explicit tmux window name takes precedence over it.
+
+Diagnostics record name, ownership and conversation-ID transitions in
+`${XDG_STATE_HOME:-~/.local/state}/tmux-ai-session-name/events.jsonl`. Files are
+private to the user and rotate at 256 KiB, keeping one previous file (512 KiB
+maximum combined). Unchanged polls produce no events. The log contains tmux
+server/window/pane IDs and old/new values, without transcripts or process
+environments. Set `@ai-session-name-diagnostics off` to disable recording. The
+log explains the plugin's decisions; it does not capture Codex UI keystrokes.
 
 Reloading tmux configuration is safe: the plugin owns one indexed self-heal
 hook per event and removes append-only hook entries left by older releases.
@@ -87,7 +104,11 @@ cached names or launch arguments, which can become stale after a session switch.
 
 Codex display names use the current database's `name` column. Older schemas
 retain the `title` fallback only when it differs from `first_user_message` or
-that message is empty. An unnamed live session still has a usable identity.
+that message is empty. Current Codex can generate titles automatically, and
+its saved-name metadata does not distinguish those from `/rename`. The plugin
+therefore treats these as display titles, not proof of a manual choice. A user
+who wants a window label to survive `/new`, `/resume` or `/fork` should name the
+tmux window. An unnamed live session still has a usable identity.
 Launch UUIDs, shell snapshots, resume aliases and opt-in process log history
 remain compatibility fallbacks for naming when live identity is unavailable.
 
@@ -129,5 +150,6 @@ tests/run.sh
 
 The suite uses isolated tmux servers and covers provider metadata, live session
 identity, automatic-name restoration, global application-rename policy, manual
-override ownership, fork dispatch, and popup input. It never forks a real agent
-session.
+override ownership before and after claiming a window, failed detections,
+conversation switches, diagnostic bounds, fork dispatch, and popup input. It
+never forks a real agent session.

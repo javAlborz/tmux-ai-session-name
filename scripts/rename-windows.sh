@@ -70,6 +70,7 @@ case "$release_unnamed_after" in
   ''|*[!0-9]*) release_unnamed_after=0 ;;
 esac
 debounce_ticks="$(tmux_option "@ai-session-name-debounce-ticks" "2")"
+diagnostics="$(tmux_option "@ai-session-name-diagnostics" "on")"
 case "$debounce_ticks" in
   ''|*[!0-9]*) debounce_ticks=2 ;;
 esac
@@ -83,6 +84,30 @@ pending_name_option="@ai-session-name-pending-name"
 pending_thread_id_option="@ai-session-name-pending-thread-id"
 pending_count_option="@ai-session-name-pending-count"
 manual_identity_option="@ai-session-name-manual-identity"
+manual_name_option="@ai-session-name-manual-name"
+
+# Record transitions instead of every poll. Logging failure cannot stop naming.
+audit_change() {
+  [ "$diagnostics" = on ] || return 0
+  case "$2" in
+    @ai-session-name-thread-id|@ai-session-name-manual-name|@ai-session-name-current-name|@ai-session-name-owned|window-name) ;;
+    *) return 0 ;;
+  esac
+  python3 "$plugin_dir/scripts/name-audit.py" "$server_pid" "$1" "${pane_id:-}" \
+    "${2#@ai-session-name-}" "$3" "$4" >/dev/null 2>&1 || true
+}
+
+rename_window() {
+  local before
+  before="$(tmux display-message -pt "$1" '#{window_name}' 2>/dev/null || true)"
+  # One tmux command queue keeps the hook between setting and clearing this
+  # marker, so our own writes cannot be mistaken for a manual rename.
+  if tmux set-window-option -t "$1" @ai-session-name-internal-rename 1 \; \
+    rename-window -t "$1" "$2" \; \
+    set-window-option -ut "$1" @ai-session-name-internal-rename; then
+    audit_change "$1" window-name "$before" "$2"
+  fi
+}
 
 window_option() {
   local target="$1"
@@ -97,17 +122,25 @@ set_window_option_if_changed() {
   local target="$1"
   local option="$2"
   local value="$3"
+  local previous
 
-  [ "$(window_option "$target" "$option")" = "$value" ] && return 0
-  tmux set-window-option -t "$target" "$option" "$value" >/dev/null 2>&1 || true
+  previous="$(window_option "$target" "$option")"
+  [ "$previous" = "$value" ] && return 0
+  if tmux set-window-option -t "$target" "$option" "$value" >/dev/null 2>&1; then
+    audit_change "$target" "$option" "$previous" "$value"
+  fi
 }
 
 unset_window_option_if_set() {
   local target="$1"
   local option="$2"
+  local previous
 
   tmux show-option -w -t "$target" "$option" >/dev/null 2>&1 || return 0
-  tmux set-window-option -t "$target" -u "$option" >/dev/null 2>&1 || true
+  previous="$(window_option "$target" "$option")"
+  if tmux set-window-option -t "$target" -u "$option" >/dev/null 2>&1; then
+    audit_change "$target" "$option" "$previous" ""
+  fi
 }
 
 set_automatic_rename_if_changed() {
@@ -176,7 +209,7 @@ restore_plugin_owned_window() {
   fi
 
   if [ -n "$new_name" ] && [ "$new_name" != "$current_name" ]; then
-    tmux rename-window -t "$target" "$new_name"
+    rename_window "$target" "$new_name"
   fi
   case "$previous_auto" in
     inherit:*)
@@ -218,19 +251,17 @@ clear_pending_candidate() {
 
 release_for_manual_override() {
   local target="$1"
-  local detection_identity="$2"
+  local name="$2"
 
   unset_window_option_if_set "$target" "$owned_option"
   unset_window_option_if_set "$target" "$previous_name_option"
   unset_window_option_if_set "$target" "$previous_auto_option"
   unset_window_option_if_set "$target" "$current_name_option"
-  unset_window_option_if_set "$target" "$thread_id_option"
   unset_window_option_if_set "$target" "$unresolved_since_option"
   clear_pending_candidate "$target"
   set_automatic_rename_if_changed "$target" off
-  if [ -n "$detection_identity" ]; then
-    set_window_option_if_changed "$target" "$manual_identity_option" "$detection_identity"
-  fi
+  unset_window_option_if_set "$target" "$manual_identity_option"
+  set_window_option_if_changed "$target" "$manual_name_option" "$name"
 }
 
 weak_candidate_ready() {
@@ -328,7 +359,7 @@ release_unresolved_plugin_owned_window() {
 
   if [ -n "$new_name" ] && [ "$new_name" != "$current_name" ]; then
     if [ -z "$plugin_name" ] || [ "$current_name" = "$plugin_name" ]; then
-      tmux rename-window -t "$target" "$new_name"
+      rename_window "$target" "$new_name"
     fi
   fi
   if [ -n "$plugin_name" ] && [ "$current_name" != "$plugin_name" ]; then
@@ -376,9 +407,35 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
   esac
   seen_windows="$seen_windows$window_id "
   owned="$(window_option "$window_id" "$owned_option")"
+  plugin_name="$(window_option "$window_id" "$current_name_option")"
+  manual_name="$(window_option "$window_id" "$manual_name_option")"
+  local_auto="$(window_option "$window_id" automatic-rename)"
+
+  # rename-window and new-window -n disable automatic naming locally. Respect
+  # that signal even before our first claim. Inherited global settings are not
+  # evidence of an explicit window name. A manual choice belongs to the window,
+  # independently of detection failures or a change of agent conversation.
+  case "$local_auto" in
+    on|1)
+      unset_window_option_if_set "$window_id" "$manual_name_option"
+      unset_window_option_if_set "$window_id" "$manual_identity_option"
+      manual_name=""
+      ;;
+    *)
+      if [ -n "$manual_name" ] ||
+        { [ "$owned" = 1 ] && [ -n "$plugin_name" ] && [ "$window_name" != "$plugin_name" ]; } ||
+        { [ "$owned" != 1 ] && { [ -n "$manual_name" ] || [ "$local_auto" = off ] || [ "$local_auto" = 0 ]; }; }; then
+        release_for_manual_override "$window_id" "$window_name"
+        manual_name="$window_name"
+        owned=""
+      fi
+      ;;
+  esac
+
   result="$(AI_SESSION_NAME_REPORT_ID=1 "$detect_script" "$pane_pid" "$pane_cwd" "$pane_title" 2>/dev/null || true)"
   if [ -z "$result" ]; then
-    unset_window_option_if_set "$window_id" "$manual_identity_option"
+    unset_window_option_if_set "$window_id" "$thread_id_option"
+    [ -z "$manual_name" ] || continue
     tool_only="$(AI_SESSION_NAME_REPORT_TOOL_ONLY=1 "$detect_script" "$pane_pid" "$pane_cwd" "$pane_title" 2>/dev/null || true)"
     if [ -n "$tool_only" ]; then
       owned="$(window_option "$window_id" "$owned_option")"
@@ -386,7 +443,7 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
         new_name="$(tmux display-message -pt "$pane_id" -p '#{pane_current_command}' 2>/dev/null || true)"
         new_name="$(sanitize_name "$new_name" "$max_length")"
         if [ -n "$new_name" ] && [ "$new_name" != "$window_name" ]; then
-          tmux rename-window -t "$window_id" "$new_name"
+          rename_window "$window_id" "$new_name"
         fi
         continue
       fi
@@ -408,7 +465,7 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
         new_name="$(tmux display-message -pt "$pane_id" -p '#{pane_current_command}' 2>/dev/null || true)"
         new_name="$(sanitize_name "$new_name" "$max_length")"
         if [ -n "$new_name" ]; then
-          tmux rename-window -t "$window_id" "$new_name"
+          rename_window "$window_id" "$new_name"
         fi
         continue
         ;;
@@ -422,7 +479,7 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
       fi
       new_name="$(sanitize_name "$new_name" "$max_length")"
       if [ -n "$new_name" ]; then
-        tmux rename-window -t "$window_id" "$new_name"
+        rename_window "$window_id" "$new_name"
       fi
     fi
     continue
@@ -448,6 +505,14 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
     fi
   fi
   [ -n "$tool" ] || continue
+  # Identity follows the agent even under a manual window name. Branching
+  # independently verifies the live identity again when the key is pressed.
+  if [ -n "$identity" ]; then
+    set_window_option_if_changed "$window_id" "$thread_id_option" "$identity"
+  else
+    unset_window_option_if_set "$window_id" "$thread_id_option"
+  fi
+  [ -z "$manual_name" ] || continue
   # Track identity independently of display names, including unnamed sessions.
   if [ -z "$session" ] && { [ "$confidence" = live ] || [ "$confidence" = ambiguous ]; }; then
     release_unresolved_plugin_owned_window "$window_id" "$pane_cwd" "$window_name"
@@ -460,28 +525,9 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
   fi
   [ -n "$session" ] || session="$tool"
 
-  detection_identity="$identity"
-  [ -n "$detection_identity" ] || detection_identity="${tool}:${session}"
-  manual_identity="$(window_option "$window_id" "$manual_identity_option")"
-  if [ -n "$manual_identity" ]; then
-    if [ "$manual_identity" = "$detection_identity" ]; then
-      [ -z "$identity" ] || set_window_option_if_changed "$window_id" "$thread_id_option" "$identity"
-      continue
-    fi
-    unset_window_option_if_set "$window_id" "$manual_identity_option"
-  fi
-
   new_name="${format//\#\{tool\}/$tool}"
   new_name="${new_name//\#\{session\}/$session}"
   new_name="$(sanitize_name "$new_name" "$max_length")"
-
-  owned="$(window_option "$window_id" "$owned_option")"
-  plugin_name="$(window_option "$window_id" "$current_name_option")"
-  if [ "$owned" = "1" ] && [ -n "$plugin_name" ] && [ "$window_name" != "$plugin_name" ]; then
-    release_for_manual_override "$window_id" "$detection_identity"
-    [ -z "$identity" ] || set_window_option_if_changed "$window_id" "$thread_id_option" "$identity"
-    continue
-  fi
 
   if [ -n "$identity" ] && identity_owned_by_other_window "$window_id" "$identity"; then
     restore_plugin_owned_window "$window_id" "$pane_cwd" "$window_name"
@@ -497,17 +543,6 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
       set_window_option_if_changed "$window_id" "$previous_name_option" "$window_name"
       previous_auto="$(automatic_rename_state "$window_id")"
       set_window_option_if_changed "$window_id" "$previous_auto_option" "$previous_auto"
-    elif [ -n "$identity" ]; then
-      previous_identity="$(window_option "$window_id" "$thread_id_option")"
-      if [ -n "$previous_identity" ] && [ "$previous_identity" != "$identity" ]; then
-        plugin_name="$(window_option "$window_id" "$current_name_option")"
-        if [ -n "$plugin_name" ] && [ "$window_name" = "$plugin_name" ]; then
-          :
-        else
-          set_window_option_if_changed "$window_id" "$previous_name_option" "$window_name"
-          set_window_option_if_changed "$window_id" "$previous_auto_option" off
-        fi
-      fi
     fi
     set_window_option_if_changed "$window_id" "$owned_option" 1
     unset_window_option_if_set "$window_id" "$manual_identity_option"
@@ -521,7 +556,7 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
     clear_pending_candidate "$window_id"
     set_automatic_rename_if_changed "$window_id" off
     if [ "$new_name" != "$window_name" ]; then
-      tmux rename-window -t "$window_id" "$new_name"
+      rename_window "$window_id" "$new_name"
     fi
   fi
 done
