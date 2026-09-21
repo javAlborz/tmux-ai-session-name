@@ -39,7 +39,7 @@ export default function tmuxSessionStatus(pi: ExtensionAPI, helperOverride?: (na
                 const name = snapshot.state === "waiting" ? "ai-waiting-set" :
                     snapshot.state === "done" ? "ai-unread-set" : "ai-unread-clear";
                 delivery = delivery.then(() => helperOverride(name)).catch(() => {});
-                return;
+                return delivery;
             }
             const helper = fileURLToPath(new URL("../status/ai-status.py", import.meta.url));
             const event = snapshot.state === "working" ? "start" : snapshot.state === "waiting" ? "waiting" :
@@ -61,12 +61,12 @@ export default function tmuxSessionStatus(pi: ExtensionAPI, helperOverride?: (na
 		wrapped.add(ui);
 		async function during<T>(action: () => Promise<T>): Promise<T> {
 			dialogs++;
-			if (context) publish(context);
+			if (context) await publish(context);
 			try {
 				return await action();
 			} finally {
 				dialogs--;
-				if (context) publish(context);
+				if (context) await publish(context);
 			}
 		}
 		const select = ui.select.bind(ui);
@@ -84,7 +84,7 @@ export default function tmuxSessionStatus(pi: ExtensionAPI, helperOverride?: (na
 	pi.on("session_start", (_event, ctx) => {
 		state = "idle";
 		if (ctx.hasUI) wrapDialogs(ctx.ui);
-		publish(ctx);
+		const pending = publish(ctx);
 		if (ctx.hasUI && !timer) {
 			timer = setInterval(() => {
 				if (context && identity !== JSON.stringify([context.sessionManager.getSessionId(), pi.getSessionName()])) {
@@ -93,14 +93,16 @@ export default function tmuxSessionStatus(pi: ExtensionAPI, helperOverride?: (na
 			}, 250);
 			timer.unref();
 		}
+		return pending;
 	});
-	pi.on("input", (_event, ctx) => { state = "idle"; publish(ctx); });
-	pi.on("agent_start", (_event, ctx) => { state = "working"; publish(ctx); });
-	pi.on("agent_end", (_event, ctx) => { state = "done"; publish(ctx); });
+	pi.on("input", (_event, ctx) => { state = "idle"; return publish(ctx); });
+	pi.on("agent_start", (_event, ctx) => { state = "working"; return publish(ctx); });
+	pi.on("agent_end", (_event, ctx) => { state = "done"; return publish(ctx); });
 	pi.on("session_shutdown", (_event, ctx) => {
-		state = "closed"; publish(ctx);
+		state = "closed"; const pending = publish(ctx);
 		if (timer) clearInterval(timer);
 		timer = undefined;
+		return pending;
 	});
 
 	pi.registerTool({

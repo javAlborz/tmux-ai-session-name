@@ -19,12 +19,12 @@ Publish the archive and `SHA256SUMS` together. Consumers pin the archive hash;
 The archive can be mirrored without changing its bytes. Runtime requirements
 are tmux 3.3+, Python 3.6+, Bash, jq, flock, and standard Linux utilities.
 
-Extract under a shared, read-only directory such as `/opt/tmux-ai-session/0.1.0`.
+Extract under a shared, read-only directory such as `/opt/tmux-ai-session/0.1.1`.
 All executable paths are relative to that installation. Run its controller
 after user configuration loads, passing the user's socket explicitly:
 
 ```sh
-python3 /opt/tmux-ai-session/0.1.0/shared/integration.py activate --socket /path/to/socket
+python3 /opt/tmux-ai-session/0.1.1/shared/integration.py activate --socket /path/to/socket
 ```
 
 The controller adds a marker to existing window formats and installs indexed

@@ -81,3 +81,25 @@ test("direct transport updates only its pane and preserves window styles", () =>
     rmSync(dir, {recursive: true});
   }
 });
+
+test("trusted helper delivery is awaited and serialized by lifecycle events", async () => {
+  const old = {TMUX: process.env.TMUX, TMUX_PANE: process.env.TMUX_PANE};
+  process.env.TMUX = "/tmp/fixture,0,0";
+  process.env.TMUX_PANE = "%1";
+  const calls = [];
+  const run = setup(true, async name => {
+    await new Promise(resolve => setTimeout(resolve, 10));
+    calls.push(name);
+  });
+  try {
+    await run.emit("session_start");
+    await run.emit("agent_start");
+    await run.emit("agent_end");
+    assert.deepEqual(calls, ["ai-unread-clear", "ai-unread-clear", "ai-unread-set"]);
+    await run.emit("input");
+    assert.equal(calls.at(-1), "ai-unread-clear");
+  } finally {
+    await run.emit("session_shutdown");
+    for (const [key,value] of Object.entries(old)) {if (value === undefined) delete process.env[key]; else process.env[key] = value;}
+  }
+});
