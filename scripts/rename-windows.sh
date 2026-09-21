@@ -2,7 +2,10 @@
 set -u
 
 plugin_dir="${AI_SESSION_NAME_PLUGIN_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-detect_script="$plugin_dir/scripts/session-name-for-pane.sh"
+detect_script="${AI_SESSION_NAME_DETECT_SCRIPT:-$plugin_dir/scripts/session-name-for-pane.sh}"
+legacy_names=""
+legacy_prefixes=""
+[ ! -r "$plugin_dir/scripts/legacy-names.conf" ] || . "$plugin_dir/scripts/legacy-names.conf"
 
 # Shared per-pass state: cache file and a single process-table snapshot
 # so per-pane subscripts don't each re-fork `ps -eo`.
@@ -460,8 +463,8 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
     fi
 
     generic_window_name="$(printf '%s' "$window_name" | sed -E 's/^[[:space:]]*✳[[:space:]]*//; s/[[:space:]]+/ /g; s/^ //; s/ $//' | tr '[:upper:]' '[:lower:]')"
-    case "$generic_window_name" in
-      codex|claude|"claude code")
+    case "|$legacy_names|" in
+      *"|$generic_window_name|"*)
         new_name="$(tmux display-message -pt "$pane_id" -p '#{pane_current_command}' 2>/dev/null || true)"
         new_name="$(sanitize_name "$new_name" "$max_length")"
         if [ -n "$new_name" ]; then
@@ -471,7 +474,7 @@ while IFS=$'\t' read -r _session_id window_id pane_id pane_active pane_pid pane_
         ;;
     esac
 
-    if [ "$restore" = "on" ] && printf '%s' "$window_name" | grep -Eq '^(claude|codex): '; then
+    if [ "$restore" = "on" ] && [ -n "$legacy_prefixes" ] && printf '%s' "$window_name" | grep -Eq "$legacy_prefixes"; then
       if [ -n "$fallback" ]; then
         new_name="$fallback"
       else
