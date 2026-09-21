@@ -1,5 +1,62 @@
 # tmux-ai-session-name
 
+## Shared distribution and Pi status
+
+The `tmux-ai-session-generic` release artifact contains the same naming engine
+and JSONL provider as this plugin, plus the shared status renderer and Pi
+extension. Its provider dispatcher includes only generic session metadata and
+Pi detection. Product-specific providers and branching remain available in the
+full plugin. No downstream source rewriting is needed.
+
+Build an artifact from a clean release commit:
+
+```sh
+python3 scripts/build-release.py --out dist
+```
+
+Publish the archive and `SHA256SUMS` together. Consumers pin the archive hash;
+`manifest.json` also records the upstream commit and every installed file hash.
+The archive can be mirrored without changing its bytes. Runtime requirements
+are tmux 3.3+, Python 3.6+, Bash, jq, flock, and standard Linux utilities.
+
+Extract under a shared, read-only directory such as `/opt/tmux-ai-session/0.1.0`.
+All executable paths are relative to that installation. Run its controller
+after user configuration loads, passing the user's socket explicitly:
+
+```sh
+python3 /opt/tmux-ai-session/0.1.0/shared/integration.py activate --socket /path/to/socket
+```
+
+The controller adds a marker to existing window formats and installs indexed
+hooks. It preserves themes, local styles and key bindings. `deactivate` removes
+the owned marker/hooks and stops workers without terminating sessions. Set
+`@ai-session-name-format '#{session}'` for unprefixed window names. Naming options
+and manual override behaviour are shared with the full plugin.
+
+Load `pi/tmux-session-status.ts` as a Pi extension. By default it sends lifecycle
+events directly to the adjacent status renderer. Set `PI_TMUX_STATUS_FILE` to
+use file delivery inside a sandbox; this mode never calls tmux or host helpers.
+The host adapter must validate and translate the bounded snapshot containing
+`id`, `name`, `state`, and `revision`. States are `idle`, `working`, `waiting`,
+`done`, and `closed`. Dialogs retain waiting status until all nested dialogs
+finish. Noninteractive Pi sessions publish nothing.
+
+Trusted host launchers can pass a helper callback as the extension's second
+argument, preserving a narrower host capability without duplicating lifecycle
+logic. The callback accepts `ai-unread-clear`, `ai-waiting-set`, and
+`ai-unread-set`; it cannot be selected by a model or dialog answer.
+
+Additional release checks:
+
+```sh
+npm ci --ignore-scripts
+npm run test:pi
+python3 tests/shared-distribution.py
+```
+
+These checks exercise both Pi transports, packaged naming/manual overrides,
+reproducible archives, and shared installation under a path containing spaces.
+
 Follow coding session titles while preserving explicit tmux window names.
 
 The plugin watches the active pane in each tmux window. It resolves saved
