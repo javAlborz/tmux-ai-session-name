@@ -210,3 +210,12 @@ identity, automatic-name restoration, global application-rename policy, manual
 override ownership before and after claiming a window, failed detections,
 conversation switches, diagnostic bounds, fork dispatch, and popup input. It
 never forks a real agent session.
+
+### Status adapters
+
+The shared renderer exposes `Status.accept_event(row, event, payload)` to reject
+stale lifecycle events and `Status.reconcile(row, event, payload)` to repair
+pane state before window aggregation. Both run under the per-server state lock.
+Adapters can extend `Status.fields` with their pane options; keep `pane_title`
+last so embedded tabs remain part of the title. Lifecycle events receive the
+JSON hook payload. The default adapter preserves hook behavior.

@@ -2,7 +2,7 @@
 """Pane-owned agent state and the shared window renderer.
 
 Hooks update only their originating pane. Polling observes titles and optional
-provider activity; it never clears an outstanding permission request.
+provider activity. Adapters may reconcile state from verified live metadata.
 """
 import fcntl
 import hashlib
@@ -20,7 +20,7 @@ import time
 def shell_join(args):
     return " ".join(shlex.quote(arg) for arg in args)
 
-FIELDS = ["pane_id", "window_id", "pane_active", "pane_height", "window_active", "session_name",
+FIELDS = ["pane_id", "window_id", "pane_pid", "pane_active", "pane_height", "window_active", "session_name",
           "@ai-pane-working", "@ai-pane-waiting", "@ai-pane-unread", "@ai-pane-attn",
           "@ai-pane-attn-prev", "@ai-pane-waiting-id", "@ai-status-version",
           "@ai-working", "@ai-waiting", "@ai-unread", "@ai-attn", "pane_title"]
@@ -29,6 +29,8 @@ FIELDS = ["pane_id", "window_id", "pane_active", "pane_height", "window_active",
 
 
 class Status:
+    fields = FIELDS
+
     def __init__(self, socket=""):
         socket = socket or os.environ.get("TMUX", "").split(",")[0] or "default"
         self.command = ["tmux", "-S" if "/" in socket else "-L", socket]
@@ -55,6 +57,14 @@ class Status:
     def question_activity(self, row):
         return None
 
+    def accept_event(self, row, event, payload):
+        """Adapters may reject events from a superseded process or session."""
+        return True
+
+    def reconcile(self, row, event, payload):
+        """Adapters may repair pane state from verified live provider metadata."""
+        pass
+
     def refresh(self, event="refresh", pane="", payload=None, frame=None):
         with self.lock_path.open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
@@ -62,15 +72,15 @@ class Status:
 
     def _refresh(self, event, target, payload, frame):
         self.changes = []
-        rows = self.call("list-panes", "-a", "-F", "\t".join("#{" + field + "}" for field in FIELDS)).splitlines()
+        rows = self.call("list-panes", "-a", "-F", "\t".join("#{" + field + "}" for field in self.fields)).splitlines()
         panes = {}
         locations = {}
         windows = {}
         for line in rows:
-            values = line.split("\t", len(FIELDS) - 1)
-            if len(values) != len(FIELDS):
+            values = line.split("\t", len(self.fields) - 1)
+            if len(values) != len(self.fields):
                 continue
-            row = dict(zip(FIELDS, values))
+            row = dict(zip(self.fields, values))
             locations.setdefault(row["pane_id"], []).append(row)
             panes.setdefault(row["pane_id"], row)
             windows.setdefault(row["window_id"], row.copy())
@@ -102,7 +112,8 @@ class Status:
             self.set(window, "@ai-status-version", 2, pane=False)
 
         row = panes.get(target)
-        if row:
+        applied_event = event if row and self.accept_event(row, event, payload) else "refresh"
+        if row and applied_event != "refresh":
             call_id = str(payload.get("tool_use_id") or payload.get("tool_call_id") or payload.get("call_id") or "")
             if event == "start":
                 for flag in ("waiting", "unread", "attn"):
@@ -133,6 +144,7 @@ class Status:
 
         aggregate = {wid: dict(working=0, waiting=0, unread=0, attn=0) for wid in windows}
         for pane, row in panes.items():
+            self.reconcile(row, applied_event if pane == target else "refresh", payload if pane == target else {})
             title = row["pane_title"]
             attention = "Action Required" in title
             question_working = None
@@ -237,7 +249,7 @@ def main(status_class=Status):
     elif event != "refresh" and not target:
         return
     payload = {}
-    if event in ("waiting", "tool") and not sys.stdin.isatty():
+    if event in ("start", "stop", "idle", "waiting", "tool") and not sys.stdin.isatty():
         try:
             value = json.load(sys.stdin)
             if isinstance(value, dict):
