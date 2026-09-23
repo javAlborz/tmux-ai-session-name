@@ -20,12 +20,57 @@ import time
 def shell_join(args):
     return " ".join(shlex.quote(arg) for arg in args)
 
-FIELDS = ["pane_id", "window_id", "pane_pid", "pane_active", "pane_height", "window_active", "session_name",
+FIELDS = ["pane_id", "window_id", "pane_pid", "pane_dead", "pane_active", "pane_height", "window_active", "session_name",
           "@ai-pane-working", "@ai-pane-waiting", "@ai-pane-unread", "@ai-pane-attn",
-          "@ai-pane-attn-prev", "@ai-pane-waiting-id", "@ai-status-version",
+          "@ai-pane-attn-prev", "@ai-pane-waiting-id", "@ai-pane-exited-title", "@ai-status-version",
           "@ai-working", "@ai-waiting", "@ai-unread", "@ai-attn", "pane_title"]
 
 
+SHELLS = {"bash", "sh", "dash", "zsh", "fish", "ksh", "mksh"}
+SHELL_OPTIONS = {"-i", "-l", "-il", "-li", "-f", "--interactive", "--login",
+                 "--noprofile", "--norc", "--no-config", "--no-rcs"}
+
+
+def pane_exited(row, proc=Path("/proc")):
+    """Prove the pane is dead or back at an unoccupied foreground shell.
+
+    Missing/unknown process information keeps existing status. In particular,
+    a shell command/script, a suspended job and a background child are not an
+    idle prompt. Check all shell threads and recheck identity before returning.
+    """
+    pid = row["pane_pid"]
+    if not pid.isdigit():
+        return False
+    path = proc / pid
+    if row["pane_dead"] == "1":
+        return proc.is_dir() and not path.exists()
+    try:
+        if path.stat().st_uid != os.getuid():
+            return False
+        executable = (path / "exe").readlink()
+        if executable.name not in SHELLS:
+            return False
+        command = (path / "cmdline").read_bytes()
+        args = command.decode().rstrip("\0").split("\0")
+        if Path(args[0]).name.lstrip("-") not in SHELLS or any(arg not in SHELL_OPTIONS for arg in args[1:]):
+            return False
+
+        def identity():
+            raw = (path / "stat").read_text()
+            fields = raw[raw.rindex(")") + 2:].split()
+            return (raw[raw.index("(") + 1:raw.rindex(")")], fields[0],
+                    fields[2], fields[4], fields[5], fields[19])
+
+        before = identity()
+        if before[0] not in SHELLS or before[1] != "S" or before[2] != pid or before[4] != pid or before[3] == "0":
+            return False
+        threads = list((path / "task").iterdir())
+        if not threads or any((thread / "children").read_text().strip() for thread in threads):
+            return False
+        return (identity() == before and (path / "exe").readlink() == executable and
+                (path / "cmdline").read_bytes() == command)
+    except (OSError, ValueError, IndexError):
+        return False
 
 
 class Status:
@@ -114,6 +159,8 @@ class Status:
         row = panes.get(target)
         applied_event = event if row and self.accept_event(row, event, payload) else "refresh"
         if row and applied_event != "refresh":
+            if event in ("start", "waiting", "tool"):
+                self.set(row, "@ai-pane-exited-title", "")
             call_id = str(payload.get("tool_use_id") or payload.get("tool_call_id") or payload.get("call_id") or "")
             if event == "start":
                 for flag in ("waiting", "unread", "attn"):
@@ -146,6 +193,19 @@ class Status:
         for pane, row in panes.items():
             self.reconcile(row, applied_event if pane == target else "refresh", payload if pane == target else {})
             title = row["pane_title"]
+            title_hash = hashlib.sha256(title.encode()).hexdigest()
+            exited = pane_exited(row)
+            if exited:
+                for flag in ("working", "waiting", "attn", "attn-prev"):
+                    self.set(row, f"@ai-pane-{flag}", 0)
+                self.set(row, "@ai-pane-waiting-id", "")
+                # Keep unread completion and the user's actual terminal title.
+                # Suppress the abandoned title even during a later shell command.
+                self.set(row, "@ai-pane-exited-title", title_hash)
+            elif row["@ai-pane-exited-title"] and row["@ai-pane-exited-title"] != title_hash:
+                self.set(row, "@ai-pane-exited-title", "")
+            if exited or row["@ai-pane-exited-title"] == title_hash:
+                title = ""
             attention = "Action Required" in title
             question_working = None
             if attention and row["@ai-pane-waiting"] != "1":

@@ -38,7 +38,8 @@ def verify(prefix):
                     return
                 time.sleep(0.1)
             raise ValueError("Status did not become " + expected)
-        subprocess.run(command + ["-f", "/dev/null", "new-session", "-d", "-s", "test"],
+        # Synthetic status belongs to a live process, not an empty shell prompt.
+        subprocess.run(command + ["-f", "/dev/null", "new-session", "-d", "-s", "test", "sleep 300"],
                        env=dict(os.environ, AI_SESSION_NO_INTEGRATION="1"), check=True)
         try:
             pane = call("display-message", "-p", "#{pane_id}")

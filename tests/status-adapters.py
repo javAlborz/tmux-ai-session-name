@@ -12,7 +12,7 @@ spec.loader.exec_module(core)
 
 
 class Adapter(core.Status):
-    fields = core.FIELDS + ['@provider-state']
+    fields = core.FIELDS[:-1] + ['@provider-state'] + core.FIELDS[-1:]
     allowed = True
     observation = None
     def accept_event(self, row, event, payload):

@@ -219,3 +219,12 @@ pane state before window aggregation. Both run under the per-server state lock.
 Adapters can extend `Status.fields` with their pane options; keep `pane_title`
 last so embedded tabs remain part of the title. Lifecycle events receive the
 JSON hook payload. The default adapter preserves hook behavior.
+
+On Linux, the renderer clears abandoned working/waiting state when tmux reports
+a dead pane with no remaining process, or a known foreground shell has no child
+processes. It verifies shell executable, arguments, process identity and children
+across all shell threads. Commands, scripts, suspended/background jobs and
+unreadable or unsupported process information retain hook-based status. Unread
+completion markers and terminal/window names are preserved. An exited agent's
+unchanged title cannot restart its indicator during a later shell command; a
+new lifecycle event or changed title releases that suppression.
