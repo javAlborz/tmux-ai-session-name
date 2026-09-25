@@ -169,6 +169,13 @@ tmux window. An unnamed live session still has a usable identity.
 Launch UUIDs, shell snapshots, resume aliases and opt-in process log history
 remain compatibility fallbacks for naming when live identity is unavailable.
 
+For a foreground Codex process without an open rollout (including observed
+paginated-history resumes), the plugin can match its terminal title against a
+unique saved `name` in the same project's database metadata. This display-only
+fallback tolerates activity markers, follows title changes without caching,
+and requires the normal weak-match debounce. It supplies no conversation ID;
+unknown titles, duplicate matches and ambiguous open rollouts stay unresolved.
+
 The fork binding refreshes Codex identity when pressed and requires a unique
 live session. It refuses an unverified source instead of using the daemon's
 stored window ID. Codex is renamed inside the branch with `/rename`; Claude

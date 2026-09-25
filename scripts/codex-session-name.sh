@@ -13,7 +13,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Check open session identity before any cache or launch-time fallback. A
 # session switch does not change the pane PID, title or process arguments.
-if live_result="$(python3 "$script_dir/codex-live-session.py" "$rows")"; then
+if live_result="$(python3 "$script_dir/codex-live-session.py" "$rows" "$pane_cwd" "$_pane_title")"; then
   if [ "$report_id" = 1 ]; then
     printf '%s\n' "$live_result"
   else

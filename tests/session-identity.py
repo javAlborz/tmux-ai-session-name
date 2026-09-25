@@ -28,7 +28,7 @@ class IdentityTests(unittest.TestCase):
         (self.proc / "101/environ").write_bytes(b"")
         self.db = sqlite3.connect(self.home / "state_5.sqlite")
         self.addCleanup(self.db.close)
-        self.db.execute("create table threads(id text, title text, name text, first_user_message text, updated_at integer)")
+        self.db.execute("create table threads(id text, title text, name text, first_user_message text, updated_at integer, cwd text)")
         self.index = self.home / "session_index.jsonl"
         self.index.write_text("")
         self.rows = "100 1 bash bash\n101 100 codex codex resume newbase"
@@ -36,7 +36,7 @@ class IdentityTests(unittest.TestCase):
         self.env.pop("CODEX_THREAD_ID", None)
 
     def thread(self, ident, name):
-        self.db.execute("insert into threads values(?,?,?,?,?)", (ident, "Original prompt", name, "Original prompt", 1))
+        self.db.execute("insert into threads values(?,?,?,?,?,?)", (ident, "Original prompt", name, "Original prompt", 1, str(self.root)))
         self.db.commit()
 
     def opened(self, ident, fd=7, source="cli", parent=None):
@@ -46,8 +46,72 @@ class IdentityTests(unittest.TestCase):
         link.unlink(missing_ok=True)
         link.symlink_to(file)
 
-    def resolve(self):
-        return subprocess.run([str(PLUGIN / "scripts/codex-session-name.sh"), "100", str(self.root), "project", self.rows], env=self.env, capture_output=True, text=True)
+    def resolve(self, title="project"):
+        return subprocess.run([str(PLUGIN / "scripts/codex-session-name.sh"), "100", str(self.root), title, self.rows], env=self.env, capture_output=True, text=True)
+
+    def foreground(self):
+        (self.proc / "101/stat").write_text("101 (codex) S 100 101 101 34816 101 " + "0 " * 20)
+        self.rows = "100 1 bash bash\n101 100 codex codex resume"
+
+    def test_resume_picker_without_rollout_recovers_display_only(self):
+        self.foreground()
+        self.thread(LIVE, "agentdiff")
+        for prefix in ("", "⠇ ", "[ ! ] Action Required | ", "[ . ] Action Required | "):
+            result = self.resolve(prefix + "agentdiff | " + self.root.name)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.rstrip("\n"), "\tagentdiff\tweak")
+
+    def test_title_hint_follows_switch_without_changing_process_or_database(self):
+        self.foreground()
+        self.thread(OLD, "old")
+        self.thread(LIVE, "new")
+        self.assertEqual(self.resolve("old | " + self.root.name).stdout.rstrip("\n"), "\told\tweak")
+        self.assertEqual(self.resolve("new | " + self.root.name).stdout.rstrip("\n"), "\tnew\tweak")
+
+    def test_title_hint_requires_matching_project_and_saved_name(self):
+        self.foreground()
+        self.thread(LIVE, "agentdiff")
+        self.db.execute("update threads set cwd='/other'")
+        self.db.commit()
+        self.assertNotEqual(self.resolve("agentdiff | " + self.root.name).returncode, 0)
+        self.db.execute("update threads set cwd=?,name=null,title='agentdiff'", (str(self.root),))
+        self.db.commit()
+        self.assertNotEqual(self.resolve("agentdiff | " + self.root.name).returncode, 0)
+
+    def test_title_hint_does_not_guess_from_plain_or_unrecognised_title(self):
+        self.foreground()
+        self.thread(LIVE, "agentdiff")
+        for title in ("", "agentdiff", "agentdiff | other", "unrelated | " + self.root.name):
+            self.assertNotEqual(self.resolve(title).returncode, 0)
+
+    def test_title_hint_requires_verified_foreground_process(self):
+        self.thread(LIVE, "agentdiff")
+        title = "agentdiff | " + self.root.name
+        self.rows = "100 1 bash bash\n101 100 codex codex resume"
+        self.assertNotEqual(self.resolve(title).returncode, 0)
+        (self.proc / "101/stat").write_text("101 (codex) S 100 101 101 34816 999 " + "0 " * 20)
+        self.assertNotEqual(self.resolve(title).returncode, 0)
+
+    def test_title_hint_does_not_override_live_or_ambiguous_identity(self):
+        self.foreground()
+        self.thread(OLD, "old")
+        self.thread(LIVE, "new")
+        self.opened(LIVE)
+        title = "old | " + self.root.name
+        self.assertEqual(self.resolve(title).stdout.rstrip("\n"), f"{LIVE}\tnew\tlive")
+        self.opened(OLD, 8)
+        self.assertEqual(self.resolve(title).stdout.rstrip("\n"), "\t\tambiguous")
+
+    def test_title_hint_rejects_duplicate_names_without_selecting_a_thread(self):
+        self.foreground()
+        self.thread(OLD, "same")
+        self.thread(LIVE, "same")
+        self.assertNotEqual(self.resolve("same | " + self.root.name).returncode, 0)
+
+    def test_title_hint_preserves_delimiters_in_saved_name(self):
+        self.foreground()
+        self.thread(LIVE, "name | with ' delimiters")
+        self.assertEqual(self.resolve("name | with ' delimiters | " + self.root.name).stdout.rstrip("\n"), "\tname | with ' delimiters\tweak")
 
     def test_current_session_wins_over_historical_alias(self):
         self.thread(OLD, "fdbck")

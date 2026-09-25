@@ -4,6 +4,7 @@
 Launch arguments and inherited environment describe where a process started.
 Open rollout files describe where it is now. Ambiguity must not fall back to a
 historical alias, especially when this lookup is used to branch a session.
+Without a rollout, a verified terminal title may supply a display name only.
 """
 import json
 import os
@@ -13,6 +14,31 @@ import sqlite3
 import sys
 
 UUID = re.compile(r"^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
+
+
+def title_display_name(home, cwd, title):
+    """Match pane-local presentation to saved metadata, without claiming an ID."""
+    if not cwd or not title:
+        return ""
+    title = " ".join(title.split())
+    if title and 0x2800 <= ord(title[0]) <= 0x28ff:
+        title = title[1:].lstrip()
+    title = re.sub(r"^\[ [!./\\|\-] \] Action Required \| ", "", title)
+    suffix = " | " + (Path(cwd).name or "/")
+    if not title.endswith(suffix):
+        return ""
+    hint = title[:-len(suffix)]
+    if not hint:
+        return ""
+    try:
+        with sqlite3.connect((home / "state_5.sqlite").as_uri() + "?mode=ro", uri=True, timeout=1) as db:
+            # The name column is saved display metadata. Do not infer a name
+            # from a generated title, message, timestamp or neighbouring cwd.
+            rows = db.execute("select id,name from threads where cwd=? and name is not null", (cwd,))
+            matches = [ident for ident, name in rows if isinstance(name, str) and " ".join(name.split()) == hint]
+            return hint if len(matches) == 1 else ""
+    except (sqlite3.Error, OSError, ValueError):
+        return ""
 
 
 def display_name(home, ident):
@@ -67,11 +93,14 @@ def main():
     candidates = {}
     parents = {}
     saw_rollout = False
+    foreground_homes = {}
     for pid in primary:
+        foreground = False
         try:
             stat = (proc / pid / "stat").read_text().rsplit(")", 1)[1].split()
             if int(stat[5]) > 0 and stat[2] != stat[5]:
                 continue # A background job is not the pane's interactive agent.
+            foreground = int(stat[5]) > 0 and stat[2] == stat[5]
         except (OSError, ValueError, IndexError):
             pass
         home = default_home
@@ -85,6 +114,8 @@ def main():
             descriptors = list((proc / pid / "fd").iterdir())
         except OSError:
             continue
+        if foreground:
+            foreground_homes[pid] = home
         for fd in descriptors:
             try:
                 file = fd.resolve(strict=True)
@@ -127,6 +158,14 @@ def main():
         if saw_rollout:
             print("\t\tambiguous")
             return 0
+        if len(foreground_homes) == 1 and len(sys.argv) >= 4:
+            name = title_display_name(next(iter(foreground_homes.values())), sys.argv[2], sys.argv[3])
+            if name:
+                # Paginated history may leave no open rollout. The terminal
+                # title can recover display naming but cannot prove identity
+                # for branching. The naming engine debounces this weak hint.
+                print(f"\t{name}\tweak")
+                return 0
         return 1
     ident, home = next(iter(candidates.items()))
     name = " ".join(display_name(home, ident).split())

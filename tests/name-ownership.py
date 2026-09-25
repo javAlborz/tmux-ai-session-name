@@ -47,14 +47,14 @@ class OwnershipTests(unittest.TestCase):
         (self.proc / '900001/cmdline').write_bytes(b'codex\0')
         self.db = sqlite3.connect(self.home / 'state_5.sqlite')
         self.addCleanup(self.db.close)
-        self.db.execute('create table threads(id text primary key, title text, name text, first_user_message text, updated_at integer)')
+        self.db.execute('create table threads(id text primary key, title text, name text, first_user_message text, updated_at integer, cwd text)')
         for ident, name in [(OLD, 'platfor'), (NEW, GENERATED)]:
-            self.db.execute('insert into threads values(?,?,?,?,?)', (ident, 'Original request', name, 'Original request', 1))
+            self.db.execute('insert into threads values(?,?,?,?,?,?)', (ident, 'Original request', name, 'Original request', 1, str(self.root)))
             (self.home / 'sessions' / f'rollout-{ident}.jsonl').write_text(json.dumps({
                 'type': 'session_meta', 'payload': {'id': ident, 'source': 'cli', 'cwd': str(self.root)}
             }) + '\n')
         self.db.commit()
-        self.tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'audit', 'sleep 300')
+        self.tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'audit', '-c', str(self.root), 'sleep 300')
         self.addCleanup(lambda: self.tmux('kill-server'))
         self.pid = self.tmux('display-message', '-pt', '@0', '#{pane_pid}')
         self.processes(True)
@@ -85,6 +85,33 @@ class OwnershipTests(unittest.TestCase):
 
     def manual(self):
         self.tmux('rename-window', '-t', '@0', 'platform')
+
+    def title_only(self):
+        (self.proc / '900001/fd/7').unlink()
+        (self.proc / '900001/stat').write_text('900001 (codex) S 1 900001 900001 34816 900001 ' + '0 ' * 20)
+        self.tmux('select-pane', '-t', '@0', '-T', '⠇ platfor | ' + self.root.name)
+        # Model the generic command name tmux uses after a picker resume.
+        self.tmux('set-hook', '-gu', 'after-rename-window[92]')
+        self.tmux('rename-window', '-t', '@0', 'node')
+        self.tmux('set-option', '-w', '-t', '@0', 'automatic-rename', 'on')
+
+    def test_title_only_resume_is_debounced_without_claiming_identity(self):
+        self.title_only()
+        self.tick()
+        self.assertEqual(self.option('pending-name'), 'platfor')
+        self.assertEqual(self.option('owned'), '')
+        self.tick()
+        self.assertEqual(self.name(), 'platfor')
+        self.assertEqual(self.option('owned'), '1')
+        self.assertEqual(self.option('thread-id'), '')
+
+    def test_manual_name_wins_over_title_only_resume(self):
+        self.title_only()
+        self.manual()
+        self.tick()
+        self.tick()
+        self.assertEqual(self.name(), 'platform')
+        self.assertEqual(self.option('owned'), '')
 
     def test_automatic_window_follows_saved_title_and_explicit_codex_rename(self):
         self.tick()

@@ -74,9 +74,23 @@ case "$out" in *"cannot verify the current Codex session"*) ;; *) fail "unverifi
 ok "an unverified current session is not branched"
 
 # Naming and branch identity remain independent for unnamed/manual windows.
-win="$(make_client codex)"
 renamer="${script%/*}/rename-windows.sh"
 rename_pass() { PATH="$shim:$PATH" AI_SESSION_NAME_PLUGIN_DIR="${script%/scripts/agent-fork.sh}" AI_SESSION_NAME_RUNTIME_DIR="$tmp" bash "$renamer"; }
+
+# A picker-resumed process can expose a saved display title without a rollout.
+# It should be named, but the name must never stand in for branch identity.
+sqlite3 "$tmp/codex-home/state_5.sqlite" "create table threads(id text, name text, cwd text); insert into threads values('$id','Picker session','$tmp');"
+t select-pane -t "$win" -T "⠇ Picker session | ${tmp##*/}"
+rename_pass
+rename_pass
+[ "$(t display-message -pt "$win" '#{window_name}')" = 'Picker session' ] || fail 'picker display name was not restored'
+[ "$(t show-options -wqv -t "$win" @ai-session-name-thread-id)" = '' ] || fail 'display hint supplied a branch identity'
+out="$(run "$win" myfork)"
+case "$out" in *"cannot verify the current Codex session"*) ;; *) fail "display hint was branchable: $out" ;; esac
+ok 'title-only resume restores its name without authorizing a guessed branch'
+rm "$tmp/codex-home/state_5.sqlite"
+
+win="$(make_client codex)"
 t rename-window -t "$win" manual-base
 rename_pass
 [ "$(t show-options -wqv -t "$win" @ai-session-name-thread-id)" = "$id" ] || fail "unnamed session identity was lost"
