@@ -54,6 +54,7 @@ python3 "$repo_dir/tests/status-adapters.py"
 python3 "$repo_dir/tests/pane-exit.py"
 bash "$repo_dir/tests/claude-session-name.sh"
 bash "$repo_dir/tests/agent-fork.sh"
+python3 "$repo_dir/tests/codex-fork-picker.py"
 python3 "$repo_dir/tests/fork-prompt.py"
 
 fixture_proc="$tmp_dir/proc"

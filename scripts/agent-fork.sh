@@ -129,17 +129,24 @@ case "$client" in
       "${self%/*}/session-name-for-pane.sh" "$pane_pid" "$pane_cwd" "" 2>/dev/null || true)"
     rest="${result#*$'\t'}"
     thread_id="${rest%%$'\t'*}"
-    if [ "${result%%$'\t'*}" != codex ] || [ "${result##*$'\t'}" != live ] || [ -z "$thread_id" ]; then
-      note "cannot verify the current Codex session; no branch was created"
-      exit 0
-    fi
-    if [ -n "$thread_id" ]; then
-      if [[ ! "$thread_id" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]; then
-        note "invalid recorded Codex session ID; wait for tmux to detect the session"
-        exit 0
-      fi
+    if [ "${result%%$'\t'*}" = codex ] && [ "${result##*$'\t'}" = live ] &&
+      [[ "$thread_id" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]; then
       printf -v cmd 'codex fork %q' "$thread_id"
+    else
+      # Background-server clients may expose no open rollout. Let the user
+      # select the source in Codex itself; never guess from a title, launch ID,
+      # cached window ID or --last. Include sessions outside the pane's cwd.
+      thread_id=""
+      cmd="codex fork --all"
+      note "select the source session in the Codex fork picker"
     fi
+    # A client may use a separate account/history directory. Keep an explicit
+    # CODEX_HOME when launching either the exact fork or the picker.
+    while IFS= read -r -d '' entry; do
+      case "$entry" in
+        CODEX_HOME=*) printf -v cmd 'env %q %s' "$entry" "$cmd"; break ;;
+      esac
+    done <"/proc/$p/environ" 2>/dev/null
     ;;
   claude)
     # The plugin records no identity for Claude windows, so the picker resolves

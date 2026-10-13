@@ -70,8 +70,10 @@ done
 ok "missing, stale and malformed recorded IDs cannot redirect the branch"
 rm "$tmp/codex-home/sessions/rollout-fixture.jsonl"
 out="$(run "$win" myfork)"
-case "$out" in *"cannot verify the current Codex session"*) ;; *) fail "unverified session was branchable: $out" ;; esac
-ok "an unverified current session is not branched"
+case "$out" in *"codex fork --all"*) ;; *) fail "unverified session did not open the picker: $out" ;; esac
+case "$out" in *"codex fork $id"*|*"bad; printf injected"*|*"--last"*) fail "unverified identity reached the fork command: $out" ;; esac
+case "$out" in *"thread=<none>"*) ;; *) fail "unverified identity was retained: $out" ;; esac
+ok "an unverified current session opens the picker without a guessed identity"
 
 # Naming and branch identity remain independent for unnamed/manual windows.
 renamer="${script%/*}/rename-windows.sh"
@@ -86,8 +88,9 @@ rename_pass
 [ "$(t display-message -pt "$win" '#{window_name}')" = 'Picker session' ] || fail 'picker display name was not restored'
 [ "$(t show-options -wqv -t "$win" @ai-session-name-thread-id)" = '' ] || fail 'display hint supplied a branch identity'
 out="$(run "$win" myfork)"
-case "$out" in *"cannot verify the current Codex session"*) ;; *) fail "display hint was branchable: $out" ;; esac
-ok 'title-only resume restores its name without authorizing a guessed branch'
+case "$out" in *"codex fork --all"*) ;; *) fail "display hint did not open the picker: $out" ;; esac
+case "$out" in *"codex fork $id"*|*"fork Picker"*) fail "display hint selected a branch: $out" ;; esac
+ok 'title-only resume restores its name but requires selection in the fork picker'
 rm "$tmp/codex-home/state_5.sqlite"
 
 win="$(make_client codex)"

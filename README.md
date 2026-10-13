@@ -176,10 +176,13 @@ fallback tolerates activity markers, follows title changes without caching,
 and requires the normal weak-match debounce. It supplies no conversation ID;
 unknown titles, duplicate matches and ambiguous open rollouts stay unresolved.
 
-The fork binding refreshes Codex identity when pressed and requires a unique
-live session. It refuses an unverified source instead of using the daemon's
-stored window ID. Codex is renamed inside the branch with `/rename`; Claude
-uses its native session picker before branching.
+The fork binding refreshes Codex identity when pressed. A unique verified live
+session forks directly. Otherwise, including background-server clients without
+an open rollout, a new window opens `codex fork --all`: select the source session
+in Codex's picker or cancel to leave it untouched. Saved window IDs, launch IDs
+and display names never select a fork automatically. Both paths preserve an
+explicit `CODEX_HOME` from the detected client. Codex is renamed inside the
+branch with `/rename`; Claude uses its native session picker before branching.
 
 Claude Code windows deliberately carry no identity, so `@ai-session-name-thread-id`
 stays unset for them. Claude exposes no stable per-session id to the pane: the
