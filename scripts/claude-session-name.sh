@@ -16,6 +16,13 @@ case "$max_transcripts" in
 esac
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Read native metadata before title/launch caches: /resume and /rename can
+# change the current conversation and name without changing the process.
+native_name="$(python3 "$script_dir/claude-live-name.py" "$pane_pid" "$rows")"
+case "$?" in
+  0) printf '%s\n' "$native_name"; exit 0 ;;
+  2) exit 1 ;; # Present but unsafe/unnamed metadata must not reuse an old name.
+esac
 if [ -r "$script_dir/cache-lib.sh" ]; then
   # shellcheck disable=SC1091
   . "$script_dir/cache-lib.sh"

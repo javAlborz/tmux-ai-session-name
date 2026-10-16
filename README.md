@@ -149,9 +149,16 @@ to resuming the original session. Secure Pi processes advertising
 `PI_SAFE_TMUX_RUN` use the host's `~/bin/pi-safe-tmux` bridge and preserve their
 security lane. Older secure Pi processes must be restarted to load that bridge.
 
-Claude Code names are read from verified `/rename` records in Claude's project
-JSONL files, then from `--name`/`-n` launch arguments. Arguments retain their
-original NUL boundaries. Auto-generated pane titles are ignored.
+Claude Code names come first from its small `sessions/<pid>.json` record when
+the name is marked as user-assigned. The foreground process, process start,
+session UUID, pane and ancestry must match; nested workers cannot supply the
+name. The resolver honors `CLAUDE_CONFIG_DIR` and rereads this bounded metadata
+on each pass, so `/rename` and `/resume` do not retain cached names or require
+transcript scans. Invalid, ambiguous or non-user metadata cannot fall back to
+an older name. Older clients without native naming metadata still use verified
+`/rename` confirmations in project JSONL files, then `--name`/`-n` arguments.
+Arguments retain their original NUL boundaries. Auto-generated pane titles and
+explicit manual tmux window names keep their existing treatment.
 
 On Linux, Codex identity comes first from the primary foreground process's open
 rollout headers. Auxiliary threads are excluded. When an in-process fork retains
@@ -184,15 +191,11 @@ and display names never select a fork automatically. Both paths preserve an
 explicit `CODEX_HOME` from the detected client. Codex is renamed inside the
 branch with `/rename`; Claude uses its native session picker before branching.
 
-Claude Code windows deliberately carry no identity, so `@ai-session-name-thread-id`
-stays unset for them. Claude exposes no stable per-session id to the pane: the
-`claude` process environment has none, it does not hold its transcript open, and
-`CLAUDE_CODE_SESSION_ID` exists only inside the transient subprocesses it spawns
-for tool calls — an idle pane has no descendant at all. An identity read from
-there would appear and vanish between passes and churn the window state, and the
-transcript that holds the rename record is not a substitute: two sessions sharing
-a name match the same file, which would look like one window stealing another's
-identity. Name resolution does not need an identity, so none is reported.
+Claude Code windows deliberately export no fork identity, so
+`@ai-session-name-thread-id` stays unset for them. Native session metadata is
+used only for display names; Claude branching continues through its own picker.
+Legacy transcript matches and transient tool-process IDs also never authorize
+a branch: shared names do not identify a unique conversation.
 
 The generic provider detects an environment variable whose name ends in
 `SESSION_DIR` on the pane process or one of its descendants. Stock Pi is also

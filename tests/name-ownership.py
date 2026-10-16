@@ -86,6 +86,45 @@ class OwnershipTests(unittest.TestCase):
     def manual(self):
         self.tmux('rename-window', '-t', '@0', 'platform')
 
+    def claude_name(self, name, session=OLD):
+        home = self.root / 'claude'
+        (home / 'sessions').mkdir(exist_ok=True, parents=True)
+        (self.root / 'processes').write_text(f'{self.pid} 1 bash bash\n900001 {self.pid} claude claude\n')
+        (self.proc / self.pid).mkdir(exist_ok=True)
+        for pid, parent, comm in [(self.pid, '1', 'bash'), ('900001', self.pid, 'claude')]:
+            fields = ['S', parent, pid, pid, '34816', '900001'] + ['0'] * 13 + ['1234']
+            (self.proc / pid / 'stat').write_text(f'{pid} ({comm}) ' + ' '.join(fields))
+        (self.proc / '900001/environ').write_bytes(f'CLAUDE_CONFIG_DIR={home}\0TMUX_PANE=%0\0'.encode())
+        (home / 'sessions/900001.json').write_text(json.dumps(dict(
+            pid=900001, procStart='1234', sessionId=session, kind='interactive',
+            tmux='audit:@0.%0', name=name, nameSource='user')))
+
+    def test_claude_native_name_follows_rename_and_resume_without_branch_identity(self):
+        self.claude_name('rfctr')
+        self.tick()
+        self.assertEqual(self.name(), 'rfctr')
+        self.claude_name('renamed')
+        self.tick()
+        self.assertEqual(self.name(), 'renamed')
+        self.claude_name('resumed', NEW)
+        self.tick()
+        self.assertEqual(self.name(), 'resumed')
+        self.assertEqual(self.option('thread-id'), '')
+
+    def test_manual_window_name_wins_over_native_claude_name_and_session_switch(self):
+        self.claude_name('rfctr')
+        self.manual()
+        self.tick()
+        self.assertEqual(self.name(), 'platform')
+        self.tmux('set-option', '-w', '-t', '@0', 'automatic-rename', 'on')
+        self.tick()
+        self.assertEqual(self.name(), 'rfctr')
+        self.manual()
+        self.claude_name('resumed', NEW)
+        self.tick()
+        self.assertEqual(self.name(), 'platform')
+        self.assertEqual(self.option('owned'), '')
+
     def title_only(self):
         (self.proc / '900001/fd/7').unlink()
         (self.proc / '900001/stat').write_text('900001 (codex) S 1 900001 900001 34816 900001 ' + '0 ' * 20)
