@@ -153,6 +153,11 @@ case "$client" in
     # it. Claude session ids are stable, so there is no ambiguity to fear here.
     cmd="claude --resume --fork-session"
     [ -n "$fork_name" ] && cmd="$cmd -n $(printf '%q' "$fork_name")"
+    while IFS= read -r -d '' entry; do
+      case "$entry" in
+        CLAUDE_CONFIG_DIR=*) printf -v cmd 'env %q %s' "$entry" "$cmd"; break ;;
+      esac
+    done <"/proc/$p/environ" 2>/dev/null
     ;;
   pi)
     if [ -n "$secure_pi_run" ]; then

@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import subprocess
 import sys
 import uuid
 
@@ -72,6 +73,22 @@ def resolve(pane_pid, rows, proc):
     try:
         record = session_record(home / "sessions" / (pid + ".json"))
     except FileNotFoundError:
+        # Daemon attach clients own no interactive session record. An optional
+        # platform helper can read a binding proven through the worker's PTY.
+        # It verifies the current foreground client and exact socket generation;
+        # launch arguments and cached display names cannot provide that proof.
+        helper = Path(os.environ.get('AI_SESSION_NAME_CLAUDE_ATTACH_HELPER', str(Path.home() / '.tmux/claude-attached.py')))
+        if proc == Path('/proc') and helper.is_file():
+            try:
+                result = subprocess.run([sys.executable, str(helper), pane_pid], capture_output=True,
+                                        text=True, timeout=2)
+                if result.returncode == 0 and result.stdout.strip():
+                    return 0, result.stdout.strip()
+                args = (proc / pid / 'cmdline').read_bytes().split(b'\0')
+                if b'attach' in args or b'agents' in args:
+                    return 2, ""
+            except (OSError, subprocess.SubprocessError):
+                return 2, ""
         return 1, ""
     except (OSError, ValueError):
         return 2, ""

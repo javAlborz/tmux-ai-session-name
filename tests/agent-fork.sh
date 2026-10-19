@@ -136,6 +136,14 @@ case "$out" in *"claude --resume --fork-session"*) ;; *) fail "claude: got: $out
 case "$out" in *"-n cfork"*) ;; *) fail "claude: expected -n, got: $out" ;; esac
 ok "claude forks via its picker and names the fork"
 
+profile="$tmp/Claude profile ' quoted"
+printf -v fixture_env 'env %q' "CLAUDE_CONFIG_DIR=$profile"
+win="$(make_client claude "$fixture_env")"
+out="$(run "$win" cfork)"
+printf -v expected 'env %q claude --resume --fork-session' "CLAUDE_CONFIG_DIR=$profile"
+case "$out" in *"$expected"*) ;; *) fail "claude profile not preserved or escaped: $out" ;; esac
+ok "claude forks preserve the attached client's explicit profile"
+
 # --- a name with shell metacharacters must be escaped, never injected --------
 win="$(make_client pi)"
 t set-window-option -t "$win" @ai-session-name-thread-id "$id"

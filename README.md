@@ -1,5 +1,13 @@
 # tmux-ai-session-name
 
+On CrossCourt installations, the optional `~/.tmux/claude-attached.py` helper
+also resolves Claude background attachments. It accepts only a binding proven
+through the worker's terminal output and revalidates the foreground client and
+its socket connections before returning a user-assigned name. The launch
+argument is not a current-session identity after switching inside `claude
+attach`. No cached Claude identity is used for branching: prefix+B opens the
+native fork picker and preserves an explicit `CLAUDE_CONFIG_DIR`.
+
 ## Shared distribution and Pi status
 
 The `tmux-ai-session-generic` release artifact contains the same naming engine
