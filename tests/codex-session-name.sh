@@ -347,11 +347,66 @@ test_bare_codex_ignores_threads_outside_the_start_window() {
   assert_eq "bare codex ignores threads outside the start window" "" "$output"
 }
 
+test_cwd_start_excludes_named_guardian_threads() {
+  local home cwd start rows output
+  home="$(new_codex_home)"
+  cwd="$tmp_root/guardian-project"
+  mkdir -p "$cwd"
+  start="$(stat -c %Y "/proc/$$")"
+  seed_cwd_start_home "$home" "$cwd" "$start"
+  sqlite3 "$home/state_5.sqlite" <<'SQL'
+alter table threads add column name text;
+alter table threads add column source text default 'cli';
+alter table threads add column thread_source text default 'user';
+update threads set name='llm4' where id='01a0423f-b610-7662-b95e-1a4bb0858c34';
+update threads set name='Guardian review', source='{"subagent":{"other":"guardian"}}', thread_source='guardian_review'
+where id='01a0423f-b87d-7bc0-99c9-9b97c7d3e4e2';
+SQL
+  cat >> "$home/session_index.jsonl" <<'JSONL'
+{"id":"01a0423f-b87d-7bc0-99c9-9b97c7d3e4e2","thread_name":"Guardian review"}
+JSONL
+  rows="$$ 1 codex /opt/codex"
+  output="$(CODEX_HOME="$home" AI_SESSION_NAME_REPORT_ID=1 "$script" "$$" "$cwd" "" "$rows")"
+  assert_eq "cwd/start ignores a newer named Guardian thread" \
+    $'01a0423f-b610-7662-b95e-1a4bb0858c34\tllm4\tweak' "$output"
+
+  # A picker can delay the real fork beyond the start window, leaving only
+  # an internal review nearby. Its saved index name must not rescue it.
+  sqlite3 "$home/state_5.sqlite" "update threads set created_at_ms=created_at_ms+60000 where thread_source='user';"
+  if output="$(CODEX_HOME="$home" AI_SESSION_NAME_REPORT_ID=1 "$script" "$$" "$cwd" "" "$rows")"; then
+    fail "Guardian-only start window supplied a name: $output"
+  fi
+  assert_eq "Guardian-only start window stays unnamed" "" "$output"
+}
+
+test_cwd_start_cannot_choose_between_named_user_threads() {
+  local home cwd start rows output
+  home="$(new_codex_home)"
+  cwd="$tmp_root/shared-name-project"
+  mkdir -p "$cwd"
+  start="$(stat -c %Y "/proc/$$")"
+  seed_cwd_start_home "$home" "$cwd" "$start"
+  sqlite3 "$home/state_5.sqlite" <<'SQL'
+alter table threads add column name text default 'llm4';
+alter table threads add column source text default 'vscode';
+alter table threads add column thread_source text default 'user';
+SQL
+  rows="$$ 1 codex /opt/codex"
+  output="$(CODEX_HOME="$home" AI_SESSION_NAME_REPORT_ID=1 "$script" "$$" "$cwd" "" "$rows")"
+  assert_eq "cwd/start cannot select either of two same-named user threads" $'\t\tambiguous' "$output"
+  if output="$(CODEX_HOME="$home" AI_SESSION_NAME_REPORT_ID=0 "$script" "$$" "$cwd" "" "$rows")"; then
+    fail "name-only lookup should fail for ambiguous threads: $output"
+  fi
+  assert_eq "name-only lookup returns no name for ambiguous threads" "" "$output"
+}
+
 test_resume_alias_uses_latest_index_match
 test_logs_db_fallback_is_disabled_by_default
 test_bare_codex_resolves_by_cwd_and_start_time
 test_bare_codex_ignores_threads_from_another_directory
 test_bare_codex_ignores_threads_outside_the_start_window
+test_cwd_start_excludes_named_guardian_threads
+test_cwd_start_cannot_choose_between_named_user_threads
 test_uuid_resume_does_not_steal_stale_process_log_name
 test_uuid_resume_ignores_names_from_other_sessions_sharing_the_anchor
 test_resume_alias_can_fall_back_to_state_db

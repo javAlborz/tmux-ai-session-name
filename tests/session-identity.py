@@ -36,7 +36,18 @@ class IdentityTests(unittest.TestCase):
         self.env.pop("CODEX_THREAD_ID", None)
 
     def thread(self, ident, name):
-        self.db.execute("insert into threads values(?,?,?,?,?,?)", (ident, "Original prompt", name, "Original prompt", 1, str(self.root)))
+        self.db.execute("insert into threads (id,title,name,first_user_message,updated_at,cwd) values(?,?,?,?,?,?)", (ident, "Original prompt", name, "Original prompt", 1, str(self.root)))
+        self.db.commit()
+
+    def classify(self, ident, source="cli", thread_source="user", modern=True):
+        columns = {row[1] for row in self.db.execute("pragma table_info(threads)")}
+        if "source" not in columns:
+            self.db.execute("alter table threads add column source text default 'cli'")
+        if modern and "thread_source" not in columns:
+            self.db.execute("alter table threads add column thread_source text default 'user'")
+        self.db.execute("update threads set source=? where id=?", (source, ident))
+        if modern:
+            self.db.execute("update threads set thread_source=? where id=?", (thread_source, ident))
         self.db.commit()
 
     def opened(self, ident, fd=7, source="cli", parent=None):
@@ -102,11 +113,50 @@ class IdentityTests(unittest.TestCase):
         self.opened(OLD, 8)
         self.assertEqual(self.resolve(title).stdout.rstrip("\n"), "\t\tambiguous")
 
-    def test_title_hint_rejects_duplicate_names_without_selecting_a_thread(self):
+    def test_duplicate_fork_names_supply_display_only_without_selecting_a_thread(self):
         self.foreground()
         self.thread(OLD, "same")
         self.thread(LIVE, "same")
-        self.assertNotEqual(self.resolve("same | " + self.root.name).returncode, 0)
+        self.thread(CHILD, "Guardian review")
+        self.classify(CHILD, '{"subagent":{"other":"guardian"}}', "guardian_review")
+        result = self.resolve("same | " + self.root.name)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.rstrip("\n"), "\tsame\tweak")
+
+    def test_guardian_title_is_not_a_user_display_name(self):
+        self.foreground()
+        self.thread(CHILD, "Guardian review")
+        self.classify(CHILD, '{"subagent":{"other":"guardian"}}', "guardian_review")
+        self.assertNotEqual(self.resolve("Guardian review | " + self.root.name).returncode, 0)
+
+    def test_explicit_user_name_can_be_guardian_review(self):
+        self.foreground()
+        self.thread(LIVE, "Guardian review")
+        self.classify(LIVE, "vscode", "user")
+        self.assertEqual(self.resolve("Guardian review | " + self.root.name).stdout.rstrip("\n"),
+                         "\tGuardian review\tweak")
+
+    def test_auxiliary_metadata_blocks_all_legacy_identity_candidates(self):
+        self.thread(CHILD, "Guardian review")
+        self.index.write_text(json.dumps({"id": CHILD, "thread_name": "Guardian review"}, separators=(",", ":")) + "\n")
+        for source, thread_source in [('{"subagent":{"other":"guardian"}}', 'guardian_review'),
+                                      ('cli', 'subagent'), ('unknown', 'user')]:
+            self.classify(CHILD, source, thread_source)
+            self.rows = f"100 1 bash bash\n101 100 codex codex resume {CHILD}"
+            self.assertNotEqual(self.resolve().returncode, 0)
+            self.assertNotIn("Guardian review", self.resolve().stdout)
+
+    def test_legacy_source_metadata_excludes_auxiliary_threads(self):
+        self.thread(CHILD, "helper")
+        self.classify(CHILD, '{"subagent":{"other":"guardian"}}', modern=False)
+        self.rows = f"100 1 bash bash\n101 100 codex codex resume {CHILD}"
+        self.assertNotEqual(self.resolve().returncode, 0)
+
+    def test_auxiliary_live_record_cannot_supply_display_name(self):
+        self.thread(CHILD, "Guardian review")
+        self.classify(CHILD, '{"subagent":{"other":"guardian"}}', 'guardian_review')
+        self.opened(CHILD, source={"subagent": {"other": "guardian"}})
+        self.assertEqual(self.resolve().stdout.rstrip("\n"), "\t\tambiguous")
 
     def test_title_hint_preserves_delimiters_in_saved_name(self):
         self.foreground()

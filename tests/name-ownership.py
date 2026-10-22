@@ -152,6 +152,20 @@ class OwnershipTests(unittest.TestCase):
         self.assertEqual(self.name(), 'platform')
         self.assertEqual(self.option('owned'), '')
 
+    def test_duplicate_name_repairs_guardian_label_without_claiming_identity(self):
+        self.title_only()
+        self.db.execute("update threads set name='platfor'")
+        self.db.commit()
+        self.tmux('rename-window', '-t', '@0', 'Guardian review')
+        self.tmux('set-option', '-w', '-t', '@0', '@ai-session-name-owned', '1')
+        self.tmux('set-option', '-w', '-t', '@0', '@ai-session-name-current-name', 'Guardian review')
+        self.tmux('set-option', '-w', '-t', '@0', '@ai-session-name-thread-id', NEW)
+        self.tick()
+        self.tick()
+        self.assertEqual(self.name(), 'platfor')
+        self.assertEqual(self.option('thread-id'), '')
+        self.assertEqual(self.option('owned'), '1')
+
     def test_automatic_window_follows_saved_title_and_explicit_codex_rename(self):
         self.tick()
         self.assertEqual(self.name(), GENERATED)

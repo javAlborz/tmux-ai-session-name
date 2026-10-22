@@ -68,7 +68,8 @@ fi
 # entries out of the bounded cache; carrying them in the VALUE keeps the same
 # invalidate-on-write behaviour with one row per pane.
 cache_stamp="${state_db_mtime}:${logs_db_mtime}:${session_index_mtime}"
-cache_key="codex|${pane_pid}|id:${report_id}"
+# Invalidate names cached before auxiliary-thread filtering was introduced.
+cache_key="codex-user-v2|${pane_pid}|id:${report_id}"
 
 if command -v cache_lookup >/dev/null 2>&1; then
   cached_value="$(cache_lookup "$cache_key" 30)"
@@ -323,10 +324,9 @@ EOF_PIDS
 # database within a second or two of starting, in the directory it was started
 # in. Matching on both is narrow enough to be useful and is deliberately WEAK --
 # the renamer debounces weak candidates before claiming a window, and the caller
-# discards any candidate whose title is not a real user-set name, so an
-# ambiguous match resolves itself rather than adopting the wrong name. One turn
-# commonly produces several threads (compaction spawns its own), and only the
-# one that was actually renamed carries a name.
+# filters out non-user threads before looking up names. Internal Guardian and
+# compaction threads can also carry explicit names, so having a name alone is
+# not evidence that a thread belongs to the user's conversation.
 #
 # state_5.sqlite is the small database (17 MB where logs_2 was 795 MB), so this
 # stays cheap enough to run whenever the authoritative paths come up empty.
@@ -474,20 +474,36 @@ session_index_title_for_thread() {
 }
 
 title=""
+selected_title=""
 selected_thread_id=""
 selected_confidence=""
-candidates="$(candidate_thread_refs || true)"
+candidates="$(candidate_thread_refs | python3 "$script_dir/codex-live-session.py" --filter-candidates "$codex_home" || true)"
 while IFS=$'\t' read -r confidence thread_id; do
   [ -n "$thread_id" ] || continue
   title="$(session_index_title_for_thread "$thread_id" || true)"
   [ -n "$title" ] || title="$(sqlite_user_title_for_thread "$thread_id" || true)"
   if [ -n "$title" ]; then
+    if [ -n "$selected_thread_id" ] && [ "$selected_thread_id" != "$thread_id" ]; then
+      # A time/directory or log correlation cannot choose between multiple
+      # named user conversations. Do not let ordering turn a guess into a name.
+      title=""
+      selected_thread_id=""
+      selected_confidence="ambiguous"
+      break
+    fi
     selected_thread_id="$thread_id"
+    selected_title="$title"
     selected_confidence="$confidence"
-    break
+    [ "$confidence" = strong ] && break
   fi
 done <<<"$candidates"
 
+if [ "$selected_confidence" = ambiguous ]; then
+  [ "$report_id" = 1 ] || exit 1
+  printf '\t\tambiguous\n'
+  exit 0
+fi
+title="${selected_title:-}"
 output="$title"
 if [ -n "$title" ] && [ "$report_id" = "1" ]; then
   output="$(printf '%s\t%s\t%s' "$selected_thread_id" "$title" "$selected_confidence")"

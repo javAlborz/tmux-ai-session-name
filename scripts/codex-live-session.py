@@ -16,6 +16,49 @@ import sys
 UUID = re.compile(r"^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
 
 
+def user_thread_sql(db):
+    """Exclude auxiliary threads by metadata, never by their display name.
+
+    Older schemas have neither discriminator. Preserve their compatibility
+    path, but apply every discriminator available in newer schemas.
+    """
+    columns = {row[1] for row in db.execute("pragma table_info(threads)")}
+    clauses = []
+    if "thread_source" in columns:
+        clauses.append("(thread_source is null or thread_source = 'user')")
+    if "source" in columns:
+        clauses.append("source in ('cli', 'exec', 'vscode')")
+    return " and ".join(clauses) or "1"
+
+
+def filter_candidates(home):
+    """Filter all legacy lookup paths before any index or saved-name lookup."""
+    candidates = []
+    for line in sys.stdin.read(262144).splitlines():
+        fields = line.split("\t")
+        if len(fields) == 2 and fields[0] in ("strong", "weak") and UUID.fullmatch(fields[1]):
+            candidates.append(fields)
+    if not candidates:
+        return
+    path = home / "state_5.sqlite"
+    if not path.exists():
+        # Index-only clients predate classification metadata. These IDs are
+        # still never accepted for direct branching without a live rollout.
+        allowed = {ident for _, ident in candidates}
+    else:
+        try:
+            with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=1) as db:
+                marks = ",".join("?" for _ in candidates)
+                allowed = {row[0] for row in db.execute(
+                    "select id from threads where (" + user_thread_sql(db) + ") and id in (" + marks + ")",
+                    [ident for _, ident in candidates])}
+        except (sqlite3.Error, OSError, ValueError):
+            return  # Unreadable metadata cannot authorize a historical guess.
+    for confidence, ident in candidates:
+        if ident in allowed:
+            print(f"{confidence}\t{ident}")
+
+
 def title_display_name(home, cwd, title):
     """Match pane-local presentation to saved metadata, without claiming an ID."""
     if not cwd or not title:
@@ -34,9 +77,11 @@ def title_display_name(home, cwd, title):
         with sqlite3.connect((home / "state_5.sqlite").as_uri() + "?mode=ro", uri=True, timeout=1) as db:
             # The name column is saved display metadata. Do not infer a name
             # from a generated title, message, timestamp or neighbouring cwd.
-            rows = db.execute("select id,name from threads where cwd=? and name is not null", (cwd,))
-            matches = [ident for ident, name in rows if isinstance(name, str) and " ".join(name.split()) == hint]
-            return hint if len(matches) == 1 else ""
+            rows = db.execute("select name from threads where cwd=? and name is not null and (" + user_thread_sql(db) + ")", (cwd,))
+            # A fork can inherit its parent's name. The pane's own title is
+            # enough for display when it matches a saved user-thread name;
+            # it does not establish which same-named conversation is attached.
+            return hint if any(isinstance(name, str) and " ".join(name.split()) == hint for (name,) in rows) else ""
     except (sqlite3.Error, OSError, ValueError):
         return ""
 
@@ -45,6 +90,8 @@ def display_name(home, ident):
     first_message = None
     try:
         with sqlite3.connect((home / "state_5.sqlite").as_uri() + "?mode=ro", uri=True, timeout=1) as db:
+            if not db.execute("select id from threads where id=? and (" + user_thread_sql(db) + ")", (ident,)).fetchone():
+                return ""
             columns = {r[1] for r in db.execute("pragma table_info(threads)")}
             if "name" in columns:
                 row = db.execute("select name from threads where id=?", (ident,)).fetchone()
@@ -73,6 +120,9 @@ def display_name(home, ident):
 
 
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "--filter-candidates":
+        filter_candidates(Path(sys.argv[2]).resolve())
+        return 0
     proc = Path(os.environ.get("AI_SESSION_NAME_PROC_ROOT", "/proc"))
     default_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).resolve()
     processes = {}

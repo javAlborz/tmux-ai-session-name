@@ -183,13 +183,17 @@ who wants a window label to survive `/new`, `/resume` or `/fork` should name the
 tmux window. An unnamed live session still has a usable identity.
 Launch UUIDs, shell snapshots, resume aliases and opt-in process log history
 remain compatibility fallbacks for naming when live identity is unavailable.
+Every compatibility candidate is checked against available source metadata;
+Guardian review and other auxiliary threads cannot supply names. Directory and
+process-start guesses stay unresolved if multiple named user threads match.
 
 For a foreground Codex process without an open rollout (including observed
 paginated-history resumes), the plugin can match its terminal title against a
-unique saved `name` in the same project's database metadata. This display-only
+saved user-thread `name` in the same project's database metadata. This display-only
 fallback tolerates activity markers, follows title changes without caching,
-and requires the normal weak-match debounce. It supplies no conversation ID;
-unknown titles, duplicate matches and ambiguous open rollouts stay unresolved.
+and requires the normal weak-match debounce. Forks may share the same name:
+displaying that name supplies no conversation ID. Unknown titles, auxiliary-only
+matches and ambiguous open rollouts stay unresolved.
 
 The fork binding refreshes Codex identity when pressed. A unique verified live
 session forks directly. Otherwise, including background-server clients without
